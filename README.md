@@ -40,10 +40,10 @@ src/
 - `Groth16Integration` - Proof generation orchestration
 
 **Proving Backends:**
-- `LibrustzcashProver` - Zcash's official Rust library (WASM)
-- `DelegatedProver` - Remote proving service client
-- `PrizeWasmProver` - Prize-WASM prover
-- `SnarkjsProver` - snarkjs-based prover
+- `LibrustzcashProver` - Zcash's official Rust library (WASM) - Primary
+- `DelegatedProver` - Remote proving service client - Secondary
+- `PrizeWasmProver` - Prize-WASM prover (fallback, not actively used)
+- `SnarkjsProver` - snarkjs-based prover (fallback, requires .zkey files not included)
 
 **Transaction Handling:**
 - `ZcashTransactionBuilder` - Builds transparent transactions
@@ -150,13 +150,21 @@ Or specify paths via environment variables.
 
 The SDK supports multiple proving backends with automatic fallback:
 
-1. **librustzcash** - Zcash's official Rust library compiled to WASM (primary)
-2. **Delegated Service** - Remote proving service using librustzcash
-3. **Prize-WASM** - Optimized WASM prover from z-prize competition
-4. **snarkjs** - JavaScript-based prover (fallback, requires .zkey files)
+1. **librustzcash** - Zcash's official Rust library compiled to WASM (primary, actively used)
+2. **Delegated Service** - Remote proving service using librustzcash (secondary, actively used)
+3. **Prize-WASM** - Optimized WASM prover from z-prize competition (fallback, code exists but not actively used)
+4. **snarkjs** - JavaScript-based prover (fallback, requires .zkey files which are not included in the project)
+
+**Active Provers:**
+- librustzcash (WASM files: `zcash_prover_wasm_bg.wasm`)
+- Delegated proving service (Rust service on port 8081)
+
+**Fallback Provers (not actively used):**
+- Prize-WASM (code exists but librustzcash is preferred)
+- snarkjs (requires .zkey files which are not provided)
 
 Prover selection is configured via `proofGenerationMode`:
-- `'auto'` - Auto-detects available provers in priority order
+- `'auto'` - Auto-detects available provers in priority order (librustzcash → delegated → Prize-WASM → snarkjs)
 - `'client'` - Uses client-side WASM provers
 - `'delegated'` - Uses remote proving service
 
