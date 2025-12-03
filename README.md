@@ -1,6 +1,6 @@
 # Miden-Zcash Integration
 
-Production-ready Zcash transaction signing integration for Miden WebSDK and Browser Wallet. Provides complete support for transparent and shielded (Sapling) transactions with full note scanning, proof generation, and blockchain synchronization.
+Zcash transaction signing integration for Miden WebSDK and Browser Wallet. Provides complete support for transparent and shielded (Sapling) transactions with full note scanning, proof generation, and blockchain synchronization.
 
 ## Table of Contents
 
@@ -68,7 +68,7 @@ src/
 ### Proving Backends
 
 1. **librustzcash**: Zcash's official Rust proving library compiled to WASM
-2. **Delegated Service**: Remote proving service using librustzcash (recommended for production)
+2. **Delegated Service**: Remote proving service using librustzcash
 3. **Prize-WASM**: Optimized WASM prover from z-prize competition
 4. **snarkjs**: JavaScript-based prover (fallback, requires .zkey files)
 
