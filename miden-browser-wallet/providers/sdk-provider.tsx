@@ -1,0 +1,85 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { type ReactNode, createContext, useRef, useContext } from "react";
+import { useStore } from "zustand";
+import { type MidenSdkStore, createMidenSdkStore } from "@/store/sdk";
+import { RPC_ENDPOINT } from "@/lib/constants";
+
+export type MidenSdkStoreApi = ReturnType<typeof createMidenSdkStore>;
+
+export const MidenSdkStoreContext = createContext<MidenSdkStoreApi | undefined>(
+  undefined,
+);
+
+export interface MidenSdkProviderProps {
+  children: ReactNode;
+}
+
+export const MidenSdkProvider = ({ children }: MidenSdkProviderProps) => {
+  const storeRef = useRef<MidenSdkStoreApi | null>(null);
+
+  if (storeRef.current === null) {
+    storeRef.current = createMidenSdkStore();
+    
+    // Make store available globally for Zcash integration
+    if (typeof window !== 'undefined') {
+      (window as any).__MIDEN_SDK_STORE__ = storeRef.current;
+    }
+  }
+
+  return (
+    <MidenSdkStoreContext.Provider value={storeRef.current}>
+      {children}
+    </MidenSdkStoreContext.Provider>
+  );
+};
+
+export const useMidenSdkStore = <T,>(
+  selector: (store: MidenSdkStore) => T,
+): T => {
+  const midenSdkStoreContext = useContext(MidenSdkStoreContext);
+
+  if (!midenSdkStoreContext) {
+    throw new Error(`useCounterStore must be used within CounterStoreProvider`);
+  }
+
+  return useStore(midenSdkStoreContext, selector);
+};
+
+export const tickInterval = 3000; // 3 second
+export function useInitAndPollSyncState() {
+  const [tick, setTick] = useState(0);
+  const syncState = useMidenSdkStore((state) => state.syncState);
+  const initializeSdk = useMidenSdkStore((state) => state.initializeSdk);
+  const [client, setClient] = useState<any | null>(null);
+
+  useEffect(() => {
+    initializeSdk({});
+
+    const initClient = async () => {
+      const { WebClient } = await import("@demox-labs/miden-sdk");
+      const clientInstance = await WebClient.createClient(RPC_ENDPOINT);
+      setClient(clientInstance);
+    };
+    initClient();
+  }, []);
+
+  useEffect(() => {
+    if (client) {
+      // Sync state with error handling (non-blocking)
+      syncState(client).catch((err) => {
+        // Errors are handled in syncState, just prevent unhandled promise rejection
+        console.debug("Sync state error (handled):", err);
+      });
+    }
+  }, [tick, client, syncState]);
+
+  useEffect(() => {
+    const intervalId = setInterval(
+      () => setTick((tick) => tick + 1),
+      tickInterval,
+    );
+    return () => clearInterval(intervalId);
+  }, []);
+}

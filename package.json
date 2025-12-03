@@ -1,0 +1,86 @@
+{
+  "name": "@miden/zcash-integration",
+  "version": "0.1.0",
+  "description": "Zcash transaction signing integration for Miden WebSDK and Browser Wallet",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    },
+    "./wallet": {
+      "types": "./dist/wallet/index.d.ts",
+      "import": "./dist/wallet/index.js",
+      "require": "./dist/wallet/index.js"
+    },
+    "./shielded": {
+      "types": "./dist/shielded/index.d.ts",
+      "import": "./dist/shielded/index.js",
+      "require": "./dist/shielded/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:check": "tsc --noEmit",
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest",
+    "test:watch": "NODE_OPTIONS='--experimental-vm-modules' jest --watch",
+    "test:coverage": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage",
+    "test:unit": "NODE_OPTIONS='--experimental-vm-modules' jest --testPathIgnorePatterns=e2e",
+    "test:e2e": "NODE_OPTIONS='--experimental-vm-modules' jest tests/e2e",
+    "test:shielded": "NODE_OPTIONS='--experimental-vm-modules' jest tests/shielded",
+    "test:smoke": "npx ts-node --esm scripts/smoke-test.ts",
+    "zcash:setup": "bash scripts/setup-zcash.sh",
+    "zcash:health": "npx ts-node --esm scripts/health-check.ts",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "clean": "rm -rf dist coverage",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
+  },
+  "keywords": [
+    "zcash",
+    "miden",
+    "cryptocurrency",
+    "wallet",
+    "zk-snark",
+    "blockchain",
+    "privacy",
+    "zero-knowledge"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^2.0.1",
+    "@noble/curves": "^1.3.0",
+    "@noble/hashes": "^1.3.3",
+    "snarkjs": "^0.7.5"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.11",
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "jest": "^29.7.0",
+    "jest-junit": "^16.0.0",
+    "prettier": "^3.1.0",
+    "ts-jest": "^29.1.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.2"
+  }
+}

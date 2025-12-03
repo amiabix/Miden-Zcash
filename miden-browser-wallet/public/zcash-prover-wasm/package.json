@@ -1,0 +1,17 @@
+{
+  "name": "zcash-prover-wasm",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "zcash_prover_wasm_bg.wasm",
+    "zcash_prover_wasm.js",
+    "zcash_prover_wasm_bg.js",
+    "zcash_prover_wasm.d.ts"
+  ],
+  "main": "zcash_prover_wasm.js",
+  "types": "zcash_prover_wasm.d.ts",
+  "sideEffects": [
+    "./zcash_prover_wasm.js",
+    "./snippets/*"
+  ]
+}

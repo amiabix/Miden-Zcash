@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Testing
+coverage/
+.nyc_output/
+*.lcov
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Archive and unnecessary directories (removed)
+archive/
+integration-example/
+wallet-integration-package/
+zcash-test-app/
+miden-wallet/
+miden-wallet-adapter/
+miden-wallet-integration/
+rust-server/
+rust-wasm/
+.claude/
