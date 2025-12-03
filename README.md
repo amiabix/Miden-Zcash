@@ -1,42 +1,16 @@
 # Miden-Zcash Integration
 
-Zcash transaction signing integration for Miden WebSDK and Browser Wallet. Provides complete support for transparent and shielded (Sapling) transactions with full note scanning, proof generation, and blockchain synchronization.
+Zcash transaction signing integration for Miden WebSDK and Browser Wallet. Provides support for transparent and shielded (Sapling) transactions with note scanning, proof generation, and blockchain synchronization.
 
-## Table of Contents
+## Project Structure
 
-1. [Overview](#overview)
-2. [Architecture](#architecture)
-3. [Installation](#installation)
-4. [Configuration](#configuration)
-5. [Usage](#usage)
-6. [API Reference](#api-reference)
-7. [Implementation Details](#implementation-details)
-8. [Testing](#testing)
-9. [Development](#development)
+This repository contains three main components:
 
-## Overview
+- **`src/`** - Core Zcash integration SDK (TypeScript)
+- **`miden-browser-wallet/`** - Next.js browser wallet application
+- **`proving-service/`** - Rust-based delegated proving service
 
-This package implements a complete Zcash integration layer for the Miden blockchain ecosystem. It provides cryptographic key derivation from Miden account keys, transaction building and signing, shielded note scanning, and proof generation using multiple proving backends.
-
-### Features
-
-- **Key Derivation**: BIP32-compliant derivation of Zcash keys from Miden account private keys using HKDF-SHA256
-- **Address Generation**: Support for transparent (t-address) and shielded (z-address) addresses
-- **Transaction Building**: Construction of transparent and shielded transactions with proper serialization
-- **Note Scanning**: Blockchain scanning and decryption of shielded notes using incoming viewing keys
-- **Proof Generation**: Multiple proving backends (librustzcash, delegated service, Prize-WASM, snarkjs)
-- **Merkle Tree Management**: Incremental Merkle tree for commitment tracking and witness generation
-- **RPC Integration**: Full support for zcashd-compatible and Lightwalletd RPC endpoints
-- **State Management**: UTXO caching and note caching with persistence
-
-### Requirements
-
-- Node.js >= 18.0.0
-- TypeScript >= 5.3.0
-- Rust toolchain (for proving service, optional)
-- Zcash testnet or mainnet RPC endpoint
-
-## Architecture
+## Core SDK (`src/`)
 
 ### Module Structure
 
@@ -48,50 +22,149 @@ src/
 ├── state/            # UTXO and note caching
 ├── transactions/     # Transaction building, signing, serialization
 ├── shielded/         # Shielded transaction support
-├── wallet/           # Wallet integration and React hooks
-├── provider/         # High-level ZcashProvider API
-└── utils/            # Utility functions (bytes, encoding, hashing)
+├── wallet/           # Wallet integration layer
+├── provider/         # ZcashProvider API
+└── utils/            # Utility functions
 ```
 
-### Key Components
+### Main Exports
 
-**ZcashProvider**: High-level API providing unified interface for all Zcash operations. Handles key derivation, transaction building, note scanning, and state management.
+**Primary API:**
+- `ZcashModule` / `createZcashModule()` - High-level wallet integration
+- `ZcashProvider` - Low-level provider API
 
-**ZcashModule**: Wallet integration layer that bridges Miden wallet with Zcash functionality. Provides account derivation, address management, and transaction operations.
+**Shielded Transactions:**
+- `ShieldedTransactionBuilder` - Builds Sapling transactions
+- `NoteScanner` - Scans blockchain for shielded notes
+- `NoteCache` - Caches scanned notes
+- `Groth16Integration` - Proof generation orchestration
 
-**ShieldedTransactionBuilder**: Constructs Sapling shielded transactions with proper note encryption, commitment calculation, and proof generation.
+**Proving Backends:**
+- `LibrustzcashProver` - Zcash's official Rust library (WASM)
+- `DelegatedProver` - Remote proving service client
+- `PrizeWasmProver` - Prize-WASM prover
+- `SnarkjsProver` - snarkjs-based prover
 
-**NoteScanner**: Scans blockchain for shielded notes belonging to a viewing key. Decrypts notes and maintains Merkle tree state.
+**Transaction Handling:**
+- `ZcashTransactionBuilder` - Builds transparent transactions
+- `ZcashSigner` - Signs transactions
+- `TransactionSerializer` - Serializes transactions
 
-**Groth16Integration**: Orchestrates proof generation across multiple backends with automatic fallback and validation.
+**Key Management:**
+- `ZcashKeyDerivation` - Derives Zcash keys from Miden keys
+- `MidenKeyBridge` - Bridges Miden wallet to Zcash
 
-### Proving Backends
-
-1. **librustzcash**: Zcash's official Rust proving library compiled to WASM
-2. **Delegated Service**: Remote proving service using librustzcash
-3. **Prize-WASM**: Optimized WASM prover from z-prize competition
-4. **snarkjs**: JavaScript-based prover (fallback, requires .zkey files)
-
-## Installation
-
-### Package Installation
+### Installation
 
 ```bash
-npm install @miden/zcash-integration
-```
-
-### Build from Source
-
-```bash
-git clone https://github.com/amiabix/Miden-Zcash.git
-cd Miden-Zcash
 npm install
 npm run build
 ```
 
-### External Dependencies
+### Usage
 
-**Sapling Parameters**: Required for proof generation. Download from Zcash official sources:
+```typescript
+import { createZcashModule } from '@miden/zcash-integration/wallet';
+
+const zcashModule = createZcashModule({
+  midenWallet: midenWalletAdapter,
+  rpcEndpoint: 'https://zcash-testnet.horizenlabs.io',
+  proofGenerationMode: 'auto',
+  delegatedProverUrl: 'http://localhost:8081',
+  wasmPath: '/zcash_prover_wasm_bg.wasm'
+});
+
+await zcashModule.initialize();
+
+const addresses = await zcashModule.getAddresses(midenAccountId);
+const balance = await zcashModule.getBalance(addresses.zAddress, 'shielded');
+```
+
+## Browser Wallet (`miden-browser-wallet/`)
+
+Next.js application that integrates the Zcash SDK with the Miden browser wallet.
+
+### Setup
+
+```bash
+cd miden-browser-wallet
+pnpm install
+```
+
+### Configuration
+
+Environment variables:
+
+```bash
+NEXT_PUBLIC_ZCASH_RPC_ENDPOINT=https://zcash-testnet.horizenlabs.io
+NEXT_PUBLIC_ZCASH_RPC_USER=rpcuser
+NEXT_PUBLIC_ZCASH_RPC_PASSWORD=rpcpassword
+NEXT_PUBLIC_ZCASH_PROVING_SERVICE=http://localhost:8081
+NEXT_PUBLIC_USE_BACKEND_RPC_PROXY=false
+```
+
+### Development
+
+```bash
+pnpm dev
+```
+
+The wallet runs on `http://localhost:3000` by default.
+
+### Integration Points
+
+- **`lib/zcash/zcashService.ts`** - Initializes Zcash module
+- **`lib/zcash/midenWalletAdapter.ts`** - Adapts Miden wallet to Zcash SDK interface
+- **`providers/zcash-provider.tsx`** - React context provider
+- **`hooks/zcash/`** - React hooks for Zcash operations
+- **`components/zcash/`** - UI components for Zcash features
+
+## Proving Service (`proving-service/`)
+
+Rust-based HTTP service for delegated proof generation using librustzcash.
+
+### Build
+
+```bash
+cd proving-service
+cargo build --release
+```
+
+### Run
+
+```bash
+cargo run
+```
+
+Service runs on `http://localhost:8081` by default.
+
+### Requirements
+
+Sapling parameter files must be available at:
+- `../miden-browser-wallet/public/params/sapling-spend.params`
+- `../miden-browser-wallet/public/params/sapling-output.params`
+
+Or specify paths via environment variables.
+
+## Proof Generation
+
+The SDK supports multiple proving backends with automatic fallback:
+
+1. **librustzcash** - Zcash's official Rust library compiled to WASM (primary)
+2. **Delegated Service** - Remote proving service using librustzcash
+3. **Prize-WASM** - Optimized WASM prover from z-prize competition
+4. **snarkjs** - JavaScript-based prover (fallback, requires .zkey files)
+
+Prover selection is configured via `proofGenerationMode`:
+- `'auto'` - Auto-detects available provers in priority order
+- `'client'` - Uses client-side WASM provers
+- `'delegated'` - Uses remote proving service
+
+## External Dependencies
+
+### Sapling Parameters
+
+Required for proof generation. Download from Zcash:
 
 ```bash
 mkdir -p public/params
@@ -100,277 +173,33 @@ curl -O https://download.z.cash/downloads/sapling-output.params
 mv sapling-*.params public/params/
 ```
 
-**WASM Prover**: Optional. Place librustzcash WASM files in `public/zcash_prover_wasm_bg.wasm` or configure path in provider options.
+### WASM Prover
 
-**Proving Service**: Optional. Build and run the Rust proving service:
+Place librustzcash WASM files in `public/zcash_prover_wasm_bg.wasm` or configure path in provider options.
 
-```bash
-cd proving-service
-cargo build --release
-cargo run
-```
+### RPC Endpoint
 
-## Configuration
+Configure a Zcash RPC endpoint (testnet or mainnet). Examples:
+- Testnet: `https://zcash-testnet.horizenlabs.io`
+- Testnet Lightwalletd: `https://testnet-lightwalletd.zecwallet.co:9067`
 
-### ZcashProvider Configuration
+## Key Derivation
 
-```typescript
-import { ZcashProvider } from '@miden/zcash-integration';
+Keys are derived from Miden account private keys using HKDF-SHA256 with network as domain separator, followed by BIP32 derivation.
 
-const provider = new ZcashProvider({
-  network: 'testnet',
-  rpcEndpoint: 'https://zcash-testnet.horizenlabs.io',
-  rpcCredentials: {
-    username: 'rpcuser',
-    password: 'rpcpassword'
-  },
-  proofGenerationMode: 'auto',
-  delegatedProverUrl: 'http://localhost:8081',
-  syncInterval: 60000
-});
-```
+**Transparent Keys:** Derived at `m/44'/133'/0'/0/0` using secp256k1.
 
-### ZcashModule Configuration
+**Shielded Keys:** Spending key derived from account key, viewing key derived from spending key using Jubjub curve operations.
 
-```typescript
-import { createZcashModule } from '@miden/zcash-integration/wallet';
+## Note Scanning
 
-const zcashModule = createZcashModule({
-  midenWallet: midenWalletAdapter,
-  rpcEndpoint: 'https://zcash-testnet.horizenlabs.io',
-  proofGenerationMode: 'auto',
-  delegatedProverUrl: 'http://localhost:8081',
-  syncInterval: 60000
-});
+Shielded notes are scanned from the blockchain using incoming viewing keys. The `NoteScanner` decrypts notes and maintains Merkle tree state. Scanned notes are cached in `NoteCache` for spending.
 
-await zcashModule.initialize();
-```
-
-### Environment Variables
-
-```bash
-NEXT_PUBLIC_ZCASH_RPC_ENDPOINT=https://zcash-testnet.horizenlabs.io
-NEXT_PUBLIC_ZCASH_RPC_USER=rpcuser
-NEXT_PUBLIC_ZCASH_RPC_PASSWORD=rpcpassword
-NEXT_PUBLIC_ZCASH_PROVING_SERVICE=http://localhost:8081
-NEXT_PUBLIC_USE_BACKEND_RPC_PROXY=true
-```
-
-## Usage
-
-### Basic Usage
-
-```typescript
-import { createZcashModule } from '@miden/zcash-integration/wallet';
-
-const zcashModule = createZcashModule({
-  midenWallet: midenWalletAdapter,
-  rpcEndpoint: 'https://zcash-testnet.horizenlabs.io'
-});
-
-await zcashModule.initialize();
-
-const account = await zcashModule.getActiveZcashAccount();
-console.log('Transparent address:', account.tAddress);
-console.log('Shielded address:', account.zAddress);
-```
-
-### Address Synchronization
-
-```typescript
-const addresses = await zcashModule.getAddresses(midenAccountId);
-
-const syncResult = await zcashModule.syncAddress(
-  addresses.zAddress,
-  'shielded'
-);
-
-console.log('Notes found:', syncResult.newTransactions);
-console.log('Balance:', syncResult.updatedBalance);
-```
-
-### Transparent Transaction
-
-```typescript
-const txHash = await zcashModule.sendTransaction({
-  from: account.tAddress,
-  to: recipientAddress,
-  amount: 1000000,
-  fee: 10000
-});
-
-console.log('Transaction hash:', txHash);
-```
-
-### Shielded Transaction
-
-```typescript
-const txHash = await zcashModule.sendShieldedTransaction({
-  from: account.zAddress,
-  to: recipientZAddress,
-  amount: 1000000,
-  fee: 10000
-});
-
-console.log('Shielded transaction hash:', txHash);
-```
-
-### Note Scanning
-
-```typescript
-import { NoteScanner, NoteCache } from '@miden/zcash-integration/shielded';
-
-const cache = new NoteCache();
-const scanner = new NoteScanner(
-  { ivk: viewingKey },
-  cache,
-  { batchSize: 100, scanOutgoing: true }
-);
-
-const notes = await scanner.scanBlocks(blocks, startHeight, endHeight);
-cache.addNotes(notes);
-
-const spendableNotes = cache.getSpendableNotes(address);
-```
-
-## API Reference
-
-### ZcashProvider
-
-Primary high-level API for Zcash operations.
-
-#### Methods
-
-**getAddresses(midenAccountId: string, midenPrivateKey: Uint8Array): Promise<ZcashAddresses>**
-
-Derives Zcash addresses from Miden account. Returns transparent and shielded addresses.
-
-**getBalance(address: string, type: AddressType): Promise<Balance>**
-
-Retrieves balance for transparent or shielded address.
-
-**syncAddress(address: string, type: AddressType): Promise<SyncResult>**
-
-Synchronizes address state from blockchain. For shielded addresses, scans for notes and updates Merkle tree.
-
-**sendTransaction(params: TransactionParams): Promise<string>**
-
-Builds, signs, and broadcasts transparent transaction. Returns transaction hash.
-
-**sendShieldedTransaction(params: ShieldedTransactionParams): Promise<string>**
-
-Builds, signs, and broadcasts shielded transaction. Generates proofs, encrypts notes, and constructs full Sapling bundle.
-
-**getCommitmentTreeAnchor(blockHeight?: number): Promise<Uint8Array>**
-
-Retrieves Merkle tree root (anchor) for proof generation. Throws error if unavailable.
-
-### ZcashModule
-
-Wallet integration layer providing account management and transaction operations.
-
-#### Methods
-
-**getActiveZcashAccount(): Promise<DerivedZcashAccount>**
-
-Derives Zcash account from active Miden account. Returns addresses and keys.
-
-**getAddresses(midenAccountId: string): Promise<{ tAddress: string; zAddress: string }>**
-
-Gets Zcash addresses for Miden account. Automatically populates viewing key cache.
-
-**syncAddress(address: string, type: 'transparent' | 'shielded'): Promise<SyncResult>**
-
-Synchronizes address state. For shielded addresses, performs note scanning if viewing key is available.
-
-**sendTransaction(params: TransactionParams): Promise<string>**
-
-Sends transparent transaction.
-
-**sendShieldedTransaction(params: ShieldedTransactionParams): Promise<string>**
-
-Sends shielded transaction with automatic proof generation.
-
-### ShieldedTransactionBuilder
-
-Constructs Sapling shielded transactions.
-
-#### Methods
-
-**buildShieldingTransaction(params: ShieldingTransactionParams): Promise<UnsignedShieldedTransaction>**
-
-Builds transaction from transparent to shielded. Creates output notes and generates commitments.
-
-**buildDeshieldingTransaction(params: DeshieldingTransactionParams): Promise<UnsignedShieldedTransaction>**
-
-Builds transaction from shielded to transparent. Spends notes and creates transparent outputs.
-
-**buildShieldedTransaction(params: ShieldedTransactionParams): Promise<UnsignedShieldedTransaction>**
-
-Builds shielded-to-shielded transaction. Handles note selection, change output, and witness generation.
-
-### NoteScanner
-
-Scans blockchain for shielded notes.
-
-#### Methods
-
-**scanBlock(block: BlockData): Promise<ScannedNote[]>**
-
-Scans single block for notes belonging to viewing key. Returns decrypted notes with metadata.
-
-**scanBlocks(blocks: BlockData[], startHeight: number, endHeight: number): Promise<ScannedNote[]>**
-
-Scans multiple blocks in batch. More efficient for large ranges.
-
-### Groth16Integration
-
-Orchestrates proof generation across multiple backends.
-
-#### Methods
-
-**initialize(options?: ProverOptions): Promise<void>**
-
-Initializes proving system. Auto-detects available provers in order: librustzcash, delegated, Prize-WASM, snarkjs.
-
-**generateSpendProof(inputs: SpendProofInputs): Promise<SaplingProof>**
-
-Generates spend proof for shielded transaction. Validates inputs and returns 192-byte Groth16 proof.
-
-**generateOutputProof(inputs: OutputProofInputs): Promise<SaplingProof>**
-
-Generates output proof for new shielded note. Returns proof with commitment.
-
-## Implementation Details
-
-### Key Derivation
-
-Keys are derived from Miden account private keys using HKDF-SHA256 with network as domain separator, followed by BIP32 derivation along path `m/44'/133'/account'/change/index`.
-
-**Transparent Keys**: Derived at `m/44'/133'/0'/0/0` using secp256k1.
-
-**Shielded Keys**: Spending key derived from account key, viewing key derived from spending key using Jubjub curve operations.
-
-### Note Encryption
-
-Shielded notes are encrypted using ChaCha20Poly1305 with key derived from shared secret between ephemeral key and payment address. Ciphertext format follows ZIP-307 specification.
-
-### Merkle Tree
+## Merkle Tree
 
 Incremental Merkle tree maintains commitment tree state locally. Tree depth is 32 levels for Sapling. Witnesses are generated on-demand for proof generation. Tree state is persisted to IndexedDB in browser environments.
 
-### Proof Generation
-
-Proofs are generated using Groth16 zk-SNARKs. The system supports multiple backends with automatic fallback:
-
-1. Attempts librustzcash WASM
-2. Falls back to delegated service if configured
-3. Falls back to Prize-WASM if available
-4. Falls back to snarkjs with .zkey files
-
-All proofs are validated for correct format (192 bytes) and non-zero values before use.
-
-### Transaction Serialization
+## Transaction Serialization
 
 Transactions are serialized according to ZIP-225 specification. Shielded transactions include:
 - Transparent inputs/outputs (if any)
@@ -397,12 +226,6 @@ npm run test:e2e
 
 ```bash
 npm run test:shielded
-```
-
-### Smoke Test
-
-```bash
-npm run test:smoke
 ```
 
 ### Coverage
@@ -438,18 +261,6 @@ npm run lint:fix
 npm run format
 npm run format:check
 ```
-
-### Proving Service
-
-Build and run the Rust proving service:
-
-```bash
-cd proving-service
-cargo build --release
-cargo run
-```
-
-Service runs on `http://localhost:8081` by default. Requires Sapling parameter files at `../miden-browser-wallet/public/params/` or paths specified via environment variables.
 
 ### Health Check
 
