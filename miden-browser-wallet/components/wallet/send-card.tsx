@@ -169,7 +169,7 @@ export function SendCard({ selectedFaucet }: { selectedFaucet: FaucetInfo }) {
             loading: "Sending Private Note..",
             success: () => {
               setLoading(false);
-              return "Private Note Sent! 🚀";
+              return "Private Note Sent";
             },
 
             error: () => {

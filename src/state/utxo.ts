@@ -224,6 +224,13 @@ export class UTXOCache {
   }
 
   /**
+   * Clear UTXOs for an address (useful when cache has invalid data)
+   */
+  clearAddress(address: string): void {
+    this.cache.delete(address);
+  }
+
+  /**
    * Remove a UTXO (when spent)
    */
   removeUTXO(address: string, txid: string, vout: number): boolean {

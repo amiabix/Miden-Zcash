@@ -17,7 +17,10 @@ let isInitialized = false;
  * Initialize Zcash module
  */
 export async function initializeZcash(): Promise<ZcashModule> {
+  console.log('[ZcashService] initializeZcash called');
+  
   if (isInitialized && zcashModule) {
+    console.log('[ZcashService] Using existing initialized module');
     return zcashModule;
   }
 
@@ -31,8 +34,9 @@ export async function initializeZcash(): Promise<ZcashModule> {
   }
 
   const state = store.getState();
+  console.log('[ZcashService] Miden wallet state:', { isLoading: state.isLoading });
   if (state.isLoading) {
-    console.warn('Miden wallet is still initializing');
+    console.warn('[ZcashService] Miden wallet is still initializing');
   }
 
   const midenWalletAdapter = createMidenWalletAdapter();
@@ -41,12 +45,9 @@ export async function initializeZcash(): Promise<ZcashModule> {
   
   const configuredEndpoint = process.env.NEXT_PUBLIC_ZCASH_RPC_ENDPOINT;
   const defaultEndpoint = midenWalletAdapter.getNetwork() === 'testnet' 
-    ? 'https://zcash-testnet.gateway.tatum.io/'
-    : 'https://zcash-mainnet.gateway.tatum.io/';
+    ? 'http://localhost:18232'
+    : 'http://localhost:8232';
   const rpcEndpoint = configuredEndpoint || defaultEndpoint;
-  
-  // Auto-detect Tatum endpoint
-  const isTatumEndpoint = rpcEndpoint.includes('tatum.io');
   const walletNetwork = midenWalletAdapter.getNetwork();
   
   let endpointToCheck = rpcEndpoint;
@@ -126,17 +127,22 @@ export async function initializeZcash(): Promise<ZcashModule> {
       syncInterval: 60000
     } as any);
     
+    console.log('[ZcashService] Calling zcashModule.initialize()...');
     try {
       await zcashModule.initialize();
+      console.log('[ZcashService] zcashModule.initialize() completed successfully');
     } catch (initError: any) {
       const errorMsg = initError?.message || '';
+      console.warn('[ZcashService] zcashModule.initialize() error:', errorMsg);
       if (errorMsg.includes('RPC') || errorMsg.includes('Load failed') || errorMsg.includes('Failed to fetch')) {
-        console.warn('Zcash initialized in offline mode:', errorMsg);
+        console.warn('[ZcashService] Zcash initialized in offline mode:', errorMsg);
       } else {
+        console.error('[ZcashService] Initialization error (will throw):', initError);
         throw initError;
       }
     }
   } catch (importError: any) {
+    console.error('[ZcashService] Import/creation error:', importError);
     if (importError.message && (
       importError.message.includes('recursive use') ||
       importError.message.includes('unsafe aliasing') ||
@@ -148,6 +154,7 @@ export async function initializeZcash(): Promise<ZcashModule> {
     throw new Error(`Failed to import Zcash SDK: ${importError.message}`);
   }
 
+  console.log('[ZcashService] Zcash module initialization complete');
   isInitialized = true;
   return zcashModule;
 }

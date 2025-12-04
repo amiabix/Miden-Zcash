@@ -50,7 +50,6 @@ export async function POST(request: NextRequest) {
     
     // Determine JSON-RPC version based on endpoint
     const isNOWNodes = endpoint.includes('nownodes.io');
-    const isTatum = endpoint.includes('tatum.io');
     // zcashd uses JSON-RPC 1.0
     const jsonrpc = isNOWNodes || endpoint.includes('127.0.0.1') || endpoint.includes('localhost') ? '1.0' : '2.0';
     const requestId = isNOWNodes ? `req_${Date.now()}_${Math.random()}` : id || Date.now();
@@ -62,14 +61,14 @@ export async function POST(request: NextRequest) {
       'Accept': 'application/json'
     };
 
-    // Add authentication (only for non-Tatum endpoints)
+    // Add authentication
     // For zcashd nodes, always use Basic Auth if credentials are provided
-    if (!isTatum && RPC_USER && RPC_PASSWORD) {
+    if (RPC_USER && RPC_PASSWORD) {
       const auth = Buffer.from(`${RPC_USER}:${RPC_PASSWORD}`).toString('base64');
       headers['Authorization'] = `Basic ${auth}`;
     }
 
-    // Add API key header (NOWNodes uses 'api-key', Tatum and others use 'x-api-key')
+    // Add API key header (NOWNodes uses 'api-key', others use 'x-api-key')
     if (RPC_API_KEY) {
       headers[isNOWNodes ? 'api-key' : 'x-api-key'] = RPC_API_KEY;
     }
@@ -82,15 +81,6 @@ export async function POST(request: NextRequest) {
       id: requestId
     };
 
-    // Debug: Log request for Tatum endpoints
-    if (isTatum) {
-      console.log('[RPC Proxy] Tatum request:', {
-        endpoint,
-        method,
-        hasApiKey: !!RPC_API_KEY,
-        requestBody: JSON.stringify(rpcRequest)
-      });
-    }
 
     // Make request to Zcash node
     let response: Response;

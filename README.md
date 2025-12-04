@@ -82,9 +82,9 @@ This modular separation enables easy extension (e.g., new proof mechanisms), cac
   - Copy the example environment file:  
     `cp miden-browser-wallet/.env.example miden-browser-wallet/.env.local`
   - Edit `miden-browser-wallet/.env.local` and fill in your RPC credentials:
-    - Set `NEXT_PUBLIC_ZCASH_RPC_ENDPOINT` to your Zcash RPC endpoint URL.
-    - For Tatum API or similar services, set `NEXT_PUBLIC_ZCASH_RPC_API_KEY` to your API key.
+    - Set `NEXT_PUBLIC_ZCASH_RPC_ENDPOINT` to your local Zcash RPC endpoint URL (default: `http://localhost:18232` for testnet, `http://localhost:8232` for mainnet).
     - For a local zcashd node, set `NEXT_PUBLIC_ZCASH_RPC_USER` and `NEXT_PUBLIC_ZCASH_RPC_PASSWORD` as configured in `~/.zcash/zcash.conf`.
+    - The wallet is designed to work with a local zcashd node. Ensure your zcashd node is running and accessible.
 
 - **Download Sapling parameter files (required for proof generation):**
   - Create the directory `miden-browser-wallet/public/params/` if it does not exist.
@@ -94,17 +94,25 @@ This modular separation enables easy extension (e.g., new proof mechanisms), cac
 - **Start the development server:**
   - In `miden-browser-wallet/`, run `pnpm dev`.
   - By default, the server will be available at `http://localhost:3000/`.
-  - On startup, the wallet will attempt to connect to the configured Zcash RPC endpoint.
+  - On startup, the wallet will attempt to connect to the configured Zcash RPC endpoint. Ensure your local zcashd node is running before starting the wallet.
+
+**Important Notes:**
+- The wallet requires a local zcashd node running and accessible at the configured RPC endpoint.
+- Transparent addresses are automatically imported into the zcashd wallet when syncing, which is required for `listunspent` to discover UTXOs.
+- All amounts are handled in zatoshi (1 ZEC = 100,000,000 zatoshi). The RPC client automatically converts amounts from ZEC to zatoshi.
+- Shielded balance is calculated from locally scanned notes, as `z_getbalance` is deprecated in recent zcashd versions.
 
 ## Configuration
 
 Environment variables are the only mechanism for providing credentials. Never hardcode API keys or passwords in source code. Client-side variables use the `NEXT_PUBLIC_` prefix and are exposed to the browser bundle. Server-side variables without the prefix are only available to Next.js API routes.
 
-The `NEXT_PUBLIC_ZCASH_RPC_ENDPOINT` variable specifies the Zcash RPC endpoint URL. For testnet, use `https://zcash-testnet.gateway.tatum.io/` for Tatum API or `http://localhost:18232` for a local zcashd node. For mainnet, use `https://zcash-mainnet.gateway.tatum.io/` or `http://localhost:8232`. The `NEXT_PUBLIC_ZCASH_RPC_API_KEY` variable is required for Tatum and similar services that use header-based authentication. Get your API key from the provider's dashboard.
+The `NEXT_PUBLIC_ZCASH_RPC_ENDPOINT` variable specifies the Zcash RPC endpoint URL. For testnet, use `http://localhost:18232` for a local zcashd node. For mainnet, use `http://localhost:8232`. The default is `http://localhost:18232` for testnet.
 
 For local zcashd nodes, configure `NEXT_PUBLIC_ZCASH_RPC_USER` and `NEXT_PUBLIC_ZCASH_RPC_PASSWORD` to match the `rpcuser` and `rpcpassword` values in `~/.zcash/zcash.conf`. The `NEXT_PUBLIC_ZCASH_PROVING_SERVICE` variable specifies the URL of the delegated proving service, defaulting to `http://localhost:8081` if not set.
 
-The `NEXT_PUBLIC_USE_BACKEND_RPC_PROXY` variable, when set to `true`, routes all RPC requests through the Next.js API route at `/api/zcash/rpc` instead of making direct RPC calls from the browser. This keeps API keys server-side and prevents exposure in the browser bundle. When using the backend proxy, configure server-side variables `ZCASH_RPC_ENDPOINT`, `ZCASH_RPC_API_KEY`, `ZCASH_RPC_USER`, and `ZCASH_RPC_PASSWORD` instead of the `NEXT_PUBLIC_` prefixed versions.
+The `NEXT_PUBLIC_USE_BACKEND_RPC_PROXY` variable, when set to `true`, routes all RPC requests through the Next.js API route at `/api/zcash/rpc` instead of making direct RPC calls from the browser. This keeps credentials server-side and prevents exposure in the browser bundle. When using the backend proxy, configure server-side variables `ZCASH_RPC_ENDPOINT`, `ZCASH_RPC_USER`, and `ZCASH_RPC_PASSWORD` instead of the `NEXT_PUBLIC_` prefixed versions.
+
+**Important:** The wallet is configured to work with a local zcashd node. Ensure your zcashd node is running and properly configured before starting the wallet application.
 
 ## Key Derivation
 
@@ -112,7 +120,7 @@ Keys are derived from Miden account private keys through a multi-step process. F
 
 For transparent keys, the master seed is used to derive a BIP32 master key using HMAC-SHA512. The transparent private key is then derived at the BIP32 path `m/44'/133'/0'/0/0` using hardened derivation. The public key is computed from the private key using secp256k1 point multiplication. The address is generated by hashing the public key with SHA256 and RIPEMD160, then encoding with Base58Check using the network prefix.
 
-For shielded keys, the spending key is derived from the account key using HKDF with a specific info parameter. The spending key consists of three components: the spending key authorization component (ask), the nullifier key component (nsk), and the outgoing viewing key component (ovk). The incoming viewing key (ivk) is derived from the spending key using scalar multiplication on the Jubjub curve. The diversified public key (pk_d) is derived from the diversifier and incoming viewing key using Jubjub point operations. The shielded address is generated by encoding the diversifier and pk_d using Bech32 with the `zs1` prefix for testnet or mainnet.
+For shielded keys, the spending key is derived from the account key using HKDF with a specific info parameter. The spending key consists of three components: the spending key authorization component (ask), the nullifier key component (nsk), and the outgoing viewing key component (ovk). The incoming viewing key (ivk) is derived from the spending key using scalar multiplication on the Jubjub curve. The diversified public key (pk_d) is derived from the diversifier and incoming viewing key using Jubjub scalar multiplication: `pk_d = [ivk] * DiversifyHash(d)` where `DiversifyHash(d)` is a generator point derived from the diversifier using `jubjub_findGroupHash`. This is critical for correct shielded address derivation. The shielded address is generated by encoding the diversifier and pk_d using Bech32 with the `zs1` prefix for testnet or mainnet.
 
 ## Address Generation
 
@@ -130,11 +138,15 @@ Note decryption uses the incoming viewing key and the ephemeral public key from 
 
 After decryption, the note commitment is verified to match the commitment in the output description. If valid, the note is added to the note cache along with its Merkle tree witness. The Merkle tree is updated incrementally by appending the new commitment as a leaf and recomputing the root.
 
+The incoming viewing key (ivk) is cached when addresses are loaded to enable note scanning. The viewing key is derived from the account's spending key and stored in the note cache for efficient note discovery.
+
 ## Transaction Building
 
-Transparent transactions are built by selecting UTXOs from the UTXO cache or via RPC `listunspent` call. The UTXO selector uses a largest-first strategy, sorting available UTXOs by value in descending order and selecting the minimum set that covers the transaction amount plus fees. Change is calculated as the difference between total input value and the sum of output value and fees.
+Transparent transactions are built by selecting UTXOs from the UTXO cache or via RPC `listunspent` call. Before building a transaction, the wallet automatically imports transparent addresses into the local zcashd node using the `importaddress` RPC command. This ensures that `listunspent` can discover UTXOs for the address. If a balance exists but no UTXOs are found, the wallet may attempt a rescan with `rescan=true`.
 
-The transaction builder constructs a transaction structure with inputs referencing selected UTXOs and outputs for the recipient and change. Each input is signed using ECDSA on secp256k1 with the corresponding private key. The signature covers the transaction hash and is included in the scriptSig. The transaction is serialized to hex format for RPC broadcasting.
+The UTXO selector uses a largest-first strategy, sorting available UTXOs by value in descending order and selecting the minimum set that covers the transaction amount plus fees. **Important:** All amounts are handled in zatoshi (1 ZEC = 100,000,000 zatoshi). The RPC client automatically converts amounts from ZEC (decimal) to zatoshi (integer) when receiving responses from zcashd. The transaction builder includes safeguards to detect and convert any amounts that appear to be in ZEC format.
+
+Change is calculated as the difference between total input value and the sum of output value and fees. The transaction builder constructs a transaction structure with inputs referencing selected UTXOs and outputs for the recipient and change. Each input is signed using ECDSA on secp256k1 with the corresponding private key. The signature covers the transaction hash and is included in the scriptSig. The transaction is serialized to hex format for RPC broadcasting.
 
 Shielded transactions are built by selecting notes from the note cache using a similar largest-first strategy. The note selector filters notes by address, excludes spent notes, and ensures notes have sufficient confirmations. Selected notes are used to build spend descriptions, each containing a nullifier, Merkle tree witness, and Groth16 proof.
 
@@ -158,7 +170,7 @@ Each proof is 192 bytes and consists of three group elements: two points on G1 a
 
 ## State Management
 
-The UTXO cache stores unspent transaction outputs for transparent addresses. Each entry is keyed by transaction ID and output index, and contains the script public key, amount, confirmations, and block height. The cache is updated when addresses are synced via the `listunspent` RPC call. UTXOs are marked as spent when they are used in transaction inputs, and removed from the cache after confirmation.
+The UTXO cache stores unspent transaction outputs for transparent addresses. Each entry is keyed by transaction ID and output index, and contains the script public key, amount (in zatoshi), confirmations, and block height. The cache is updated when addresses are synced via the `listunspent` RPC call. The RPC client automatically converts amounts from ZEC to zatoshi when storing in the cache. UTXOs are marked as spent when they are used in transaction inputs, and removed from the cache after confirmation. The cache includes a `clearAddress()` method to remove all UTXOs for a specific address, useful for debugging unit conversion issues.
 
 The note cache stores shielded notes discovered through blockchain scanning. Each note entry contains the note value, nullifier, commitment, diversifier, diversified public key, and Merkle tree witness. Notes are keyed by commitment for efficient lookup. The cache tracks spent nullifiers in a separate set to prevent double-spending attempts.
 
@@ -168,11 +180,13 @@ State persistence uses IndexedDB in browser environments and the file system in 
 
 ## Transaction Flow
 
-When a user initiates a transparent transaction, the `ZcashModule.sendTransaction()` method is called with transaction parameters. The module delegates to `ZcashProvider.sendTransaction()`, which first validates the addresses and checks RPC connectivity. The provider calls `ZcashTransactionBuilder.buildTransaction()` to construct the transaction.
+When a user initiates a transparent transaction, the `ZcashModule.sendTransaction()` method is called with transaction parameters. The module delegates to `ZcashProvider.sendTransaction()`, which first validates the addresses and checks RPC connectivity. 
 
-The transaction builder calls `selectUTXOs()` which queries the UTXO cache. If the cache is empty, it falls back to an RPC `listunspent` call. UTXOs are selected using the largest-first strategy, and change is calculated. The builder constructs the transaction structure with inputs and outputs, then calls `ZcashSigner.signTransaction()` to sign each input.
+**Automatic Address Import:** Before building the transaction, the wallet automatically imports the transparent address into the local zcashd node using `importaddress` RPC command. This ensures that `listunspent` can discover UTXOs. If no UTXOs are found in the cache, the wallet triggers an automatic sync of the transparent address.
 
-After signing, the transaction is serialized to hex format by `TransactionSerializer.serialize()`. The serialized transaction is validated by `TransactionValidator.validate()` to ensure it meets Zcash protocol requirements. Finally, the transaction is broadcast via RPC `sendrawtransaction` and the transaction ID is returned.
+The provider calls `ZcashTransactionBuilder.buildTransaction()` to construct the transaction. The transaction builder calls `selectUTXOs()` which queries the UTXO cache. If the cache is empty, it falls back to an RPC `listunspent` call. The RPC client converts all amounts from ZEC (decimal) to zatoshi (integer) when receiving responses. UTXOs are selected using the largest-first strategy, and change is calculated. The builder includes safeguards to detect and convert any amounts that appear to be in ZEC format.
+
+The builder constructs the transaction structure with inputs and outputs, then calls `ZcashSigner.signTransaction()` to sign each input. After signing, the transaction is serialized to hex format by `TransactionSerializer.serialize()`. The serialized transaction is validated by `TransactionValidator.validate()` to ensure it meets Zcash protocol requirements. Finally, the transaction is broadcast via RPC `sendrawtransaction` and the transaction ID is returned.
 
 For shielded transactions, the flow begins with `ZcashModule.sendShieldedTransaction()`. The provider first checks that notes exist in the cache by calling `NoteSelector.selectNotes()`. If no notes are found, an error is thrown instructing the user to sync the address first.
 
@@ -182,23 +196,27 @@ After proof generation, the binding signature is computed and the transaction is
 
 ## RPC Communication
 
-The RPC client communicates with Zcash nodes using JSON-RPC 2.0 protocol. Requests are sent as HTTP POST requests with JSON payloads containing the method name, parameters, and request ID. Responses contain a result field on success or an error field on failure.
+The RPC client communicates with Zcash nodes using JSON-RPC 2.0 protocol (compatible with zcashd's JSON-RPC 1.0). Requests are sent as HTTP POST requests with JSON payloads containing the method name, parameters, and request ID. Responses contain a result field on success or an error field on failure.
 
-Authentication is handled based on the endpoint type. For endpoints using Basic Auth, credentials are encoded in the Authorization header. For endpoints using API key authentication, the key is included in a custom header (typically `x-api-key` for Tatum or `api-key` for NOWNodes).
+Authentication is handled using Basic Auth for local zcashd nodes. Credentials are encoded in the Authorization header using the `rpcuser` and `rpcpassword` from `~/.zcash/zcash.conf`.
 
-The client implements retry logic with exponential backoff for transient failures. Timeouts are set to 30 seconds by default, with configurable values. Connection errors are distinguished from RPC errors, allowing the application to handle network issues separately from protocol errors.
+The client implements retry logic with exponential backoff for transient failures. Timeouts are set to 30 seconds by default, with configurable values. Connection errors are distinguished from RPC errors, allowing the application to handle network issues separately from protocol errors. The client includes an `importAddress` method that calls the `importaddress` RPC command to import addresses into the local zcashd wallet, which is required for `listunspent` to discover UTXOs.
 
-When using the backend proxy, all RPC requests are routed through the Next.js API route at `/api/zcash/rpc`. The route reads server-side environment variables for credentials, preventing exposure in the browser bundle. The proxy forwards requests to the configured RPC endpoint and returns responses to the client.
+**Unit Conversion:** The `listunspent` RPC method returns amounts in ZEC (decimal format). The RPC client automatically converts these amounts to zatoshi (integer format, 1 ZEC = 100,000,000 zatoshi) when processing responses. This conversion is critical for correct transaction building and balance calculations.
+
+When using the backend proxy, all RPC requests are routed through the Next.js API route at `/api/zcash/rpc`. The route reads server-side environment variables for credentials, preventing exposure in the browser bundle. The proxy forwards requests to the configured RPC endpoint and returns responses to the client. The proxy includes error handling for node reindexing states, returning appropriate HTTP status codes (e.g., 503 Service Unavailable) when the node is unavailable.
 
 ## Error Handling
 
-Errors are categorized by type and handled appropriately. RPC errors include connection failures, authentication failures, and method-not-found errors. Connection failures trigger retry logic with exponential backoff. Authentication failures indicate misconfigured credentials and are surfaced immediately. Method-not-found errors indicate the RPC endpoint doesn't support the required functionality, such as `listunspent` not being available on Tatum API.
+Errors are categorized by type and handled appropriately. RPC errors include connection failures, authentication failures, method-not-found errors, and node reindexing states. Connection failures trigger retry logic with exponential backoff. Authentication failures indicate misconfigured credentials and are surfaced immediately. Method-not-found errors indicate the RPC endpoint doesn't support the required functionality. Node reindexing states are detected and return HTTP 503 (Service Unavailable) to indicate temporary unavailability.
 
-Transaction building errors include insufficient funds, invalid addresses, and validation failures. Insufficient funds errors distinguish between no UTXOs available (requiring address sync) and insufficient balance (requiring more funds). Invalid address errors provide specific validation failure reasons. Validation failures indicate protocol violations and prevent transaction broadcasting.
+Transaction building errors include insufficient funds, invalid addresses, and validation failures. Insufficient funds errors distinguish between no UTXOs available (requiring address sync or import) and insufficient balance (requiring more funds). The error messages provide detailed diagnostics including available balance, required amount, and potential causes (address not imported, not funded, not confirmed). Invalid address errors provide specific validation failure reasons. Validation failures indicate protocol violations and prevent transaction broadcasting.
+
+**Unit Conversion Errors:** The system includes safeguards to detect and handle unit mismatches between ZEC and zatoshi. If UTXO amounts are detected in ZEC format during transaction building, they are automatically converted. Critical errors are logged if conversion fails, prompting users to clear the cache.
 
 Proof generation errors include prover unavailability, parameter loading failures, and proof generation timeouts. When a prover is unavailable, the system attempts fallback provers in order of priority. Parameter loading failures indicate missing or corrupted Sapling parameter files. Proof generation timeouts occur when proofs take longer than the configured timeout (default 5 minutes).
 
-State synchronization errors include blockchain scanning failures and cache update failures. Scanning failures may occur due to RPC unavailability or corrupted block data. Cache update failures indicate persistence layer issues and are logged for debugging.
+State synchronization errors include blockchain scanning failures and cache update failures. Scanning failures may occur due to RPC unavailability or corrupted block data. Cache update failures indicate persistence layer issues and are logged for debugging. The system includes automatic rescan logic: if a transparent address has a balance but no UTXOs are found, it attempts `importAddress` with `rescan=true`.
 
 ## Development
 
@@ -211,6 +229,24 @@ Linting is performed with ESLint using `npm run lint`, and auto-fixing is availa
 The health check script (`npm run zcash:health`) verifies external dependencies including Sapling parameter files, WASM prover files, and RPC endpoint connectivity. The setup script (`npm run zcash:setup`) downloads required dependencies to the correct locations.
 
 The proving service is built with `cargo build --release` in the `proving-service/` directory. Run the service with `cargo run`, which starts an HTTP server on port 8081 by default. The service requires Sapling parameter files at `../miden-browser-wallet/public/params/sapling-*.params` or paths specified via environment variables.
+
+## Recent Updates
+
+### Critical Fixes
+
+- **ECDH Bug Fix:** Fixed critical bug in shielded address derivation where `pk_d` was incorrectly derived using SHA256 instead of Jubjub scalar multiplication. The correct derivation is `pk_d = [ivk] * DiversifyHash(d)`.
+
+- **ZEC to Zatoshi Conversion:** Fixed unit mismatch where RPC responses from zcashd return amounts in ZEC (decimal) but the system expects zatoshi (integer). The RPC client now automatically converts all amounts from ZEC to zatoshi when processing `listunspent` responses.
+
+- **Automatic Address Import:** Implemented automatic import of transparent addresses into the local zcashd node using `importaddress` RPC command. This ensures `listunspent` can discover UTXOs without manual intervention.
+
+- **Viewing Key Caching:** Implemented proper caching of incoming viewing keys (ivk) when addresses are loaded, enabling note scanning for shielded addresses.
+
+- **Auto-Sync for Transactions:** Transparent addresses are automatically synced before transaction building if no UTXOs are found in the cache.
+
+- **Error Handling Improvements:** Enhanced error messages with detailed diagnostics, unit conversion safeguards, and proper handling of node reindexing states.
+
+- **Tatum API Removal:** Removed all references to Tatum API. The wallet now exclusively uses local zcashd nodes.
 
 ## License
 

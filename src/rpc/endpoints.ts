@@ -48,22 +48,6 @@ export const TESTNET_ENDPOINTS: Record<string, EndpointInfo> = {
     rateLimit: 'Unknown'
   },
 
-  /**
-   * Tatum testnet endpoint
-   * Requires: API key from https://tatum.io
-   * Free tier: 5 requests/minute
-   * Premium: 200 requests/second
-   */
-  tatum: {
-    url: 'https://zcash-testnet.gateway.tatum.io',
-    description: 'Tatum testnet endpoint (requires API key)',
-    requiresAuth: true,
-    credentials: {
-      username: 'YOUR_TATUM_API_KEY',
-      password: '' // Not used for Tatum
-    },
-    rateLimit: '5 req/min (free), 200 req/sec (premium)'
-  },
 
   /**
    * FreeRPC.com Zcash endpoint

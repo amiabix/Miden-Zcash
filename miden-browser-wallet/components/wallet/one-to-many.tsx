@@ -125,7 +125,7 @@ export function OneToMany({
           faucet: row.faucetId,
         })),
       );
-      sucessTxToast("One to many payment sent successfully 🚀", txId);
+      sucessTxToast("One to many payment sent successfully", txId);
     } catch (error) {
       console.error("Error sending payment:", error);
     } finally {

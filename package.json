@@ -20,6 +20,11 @@
       "types": "./dist/shielded/index.d.ts",
       "import": "./dist/shielded/index.js",
       "require": "./dist/shielded/index.js"
+    },
+    "./utils": {
+      "types": "./dist/utils/index.d.ts",
+      "import": "./dist/utils/index.js",
+      "require": "./dist/utils/index.js"
     }
   },
   "files": [

@@ -26,7 +26,7 @@ export interface ZcashModuleConfig {
     password: string;
   };
   
-  /** RPC API key (for services like Tatum that use header-based auth) */
+  /** RPC API key (for services that use header-based auth) */
   rpcApiKey?: string;
   
   /** Proof generation mode */
@@ -96,13 +96,21 @@ export class ZcashModule {
    */
   async getActiveZcashAccount(): Promise<DerivedZcashAccount> {
     try {
+      console.log('[ZcashModule] getActiveZcashAccount() called');
       const activeAccount = await this.config.midenWallet.getActiveAccount();
+      console.log('[ZcashModule] Active Miden account:', activeAccount?.id?.substring(0, 20) + '...');
       
       if (!activeAccount || !activeAccount.id || activeAccount.id.trim() === '') {
         throw new Error('No active Miden account found. Please create or import a wallet first.');
       }
       
+      console.log('[ZcashModule] Deriving Zcash account for:', activeAccount.id.substring(0, 20) + '...');
       const zcashAccount = await this.keyBridge.deriveZcashAccount(activeAccount.id);
+      console.log('[ZcashModule] Zcash account derived:', {
+        tAddress: zcashAccount.tAddress?.substring(0, 20) + '...',
+        zAddress: zcashAccount.zAddress?.substring(0, 20) + '...',
+        hasAddresses: !!(zcashAccount.tAddress && zcashAccount.zAddress)
+      });
       
       // Validate the returned account has valid addresses
       if (!zcashAccount || 
@@ -112,11 +120,20 @@ export class ZcashModule {
           !zcashAccount.zAddress || 
           typeof zcashAccount.zAddress !== 'string' ||
           zcashAccount.zAddress.length === 0) {
+        console.error('[ZcashModule] Invalid addresses in derived account:', {
+          hasAccount: !!zcashAccount,
+          tAddress: zcashAccount?.tAddress,
+          zAddress: zcashAccount?.zAddress
+        });
         throw new Error('Failed to derive valid Zcash addresses. Private key export may not be implemented.');
       }
       
       return zcashAccount;
     } catch (error: any) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error('[ZcashModule] getActiveZcashAccount() failed:', errorMsg);
+      console.error('[ZcashModule] Error stack:', error instanceof Error ? error.stack : 'No stack');
+      
       // Re-throw with more context if it's a private key export error
       if (error.message && (
         error.message.includes('Private key export') ||
@@ -141,7 +158,13 @@ export class ZcashModule {
     }
     
     try {
+      console.log('[ZcashModule] Getting addresses for account:', midenAccountId);
       const account = await this.keyBridge.deriveZcashAccount(midenAccountId);
+      console.log('[ZcashModule] Account derived:', {
+        tAddress: account.tAddress?.substring(0, 20) + '...',
+        zAddress: account.zAddress?.substring(0, 20) + '...',
+        hasAddresses: !!(account.tAddress && account.zAddress)
+      });
       
       // Validate addresses are strings and not empty
       if (!account || 
@@ -151,6 +174,13 @@ export class ZcashModule {
           !account.zAddress || 
           typeof account.zAddress !== 'string' ||
           account.zAddress.length === 0) {
+        console.error('[ZcashModule] Invalid addresses derived:', {
+          hasAccount: !!account,
+          tAddress: account?.tAddress,
+          zAddress: account?.zAddress,
+          tAddressType: typeof account?.tAddress,
+          zAddressType: typeof account?.zAddress
+        });
         throw new Error('Failed to derive valid Zcash addresses. Private key export may not be implemented.');
       }
       
@@ -253,32 +283,54 @@ export class ZcashModule {
     // For shielded addresses, ensure viewing key is cached first
     if (type === 'shielded') {
       try {
+        console.log('[ZcashModule] syncAddress: Ensuring viewing key is cached for:', address.substring(0, 20) + '...');
+        
         // Get the active account to ensure viewing key is available
         const account = await this.getActiveZcashAccount();
+        console.log('[ZcashModule] syncAddress: Got account, zAddress:', account.zAddress?.substring(0, 20) + '...');
         
-        // Cache the viewing key in the provider if not already cached
-        // The provider's getAddresses() should have cached it, but ensure it's there
-        if (account.zAddress === address && account.viewingKey) {
-          // Viewing key is in the account object - ensure it's cached in provider
-          // This is done by calling getAddresses() which caches the viewing key
-          try {
-            const midenPrivateKey = await this.config.midenWallet.exportPrivateKey(account.midenAccountId);
-            if (midenPrivateKey && midenPrivateKey.length > 0) {
-              await this.provider.getAddresses(account.midenAccountId, midenPrivateKey);
-              midenPrivateKey.fill(0);
+        // Check if the address matches
+        if (account.zAddress === address) {
+          console.log('[ZcashModule] syncAddress: Address matches, caching viewing key...');
+          
+          // Cache the viewing key in the provider if not already cached
+          // The provider's getAddresses() should have cached it, but ensure it's there
+          if (account.viewingKey && account.viewingKey.length > 0) {
+            try {
+              const midenPrivateKey = await this.config.midenWallet.exportPrivateKey(account.midenAccountId);
+              if (midenPrivateKey && midenPrivateKey.length > 0) {
+                console.log('[ZcashModule] syncAddress: Calling provider.getAddresses() to cache viewing key...');
+                await this.provider.getAddresses(account.midenAccountId, midenPrivateKey);
+                console.log('[ZcashModule] syncAddress: Viewing key cached successfully');
+                midenPrivateKey.fill(0);
+              } else {
+                console.warn('[ZcashModule] syncAddress: Private key is empty');
+              }
+            } catch (keyError) {
+              const keyErrorMsg = keyError instanceof Error ? keyError.message : String(keyError);
+              console.error('[ZcashModule] syncAddress: Failed to export private key:', keyErrorMsg);
+              // If private key export fails, we can't cache the viewing key
+              // But we can still try to sync if it's already cached
+              console.warn('Could not cache viewing key, but proceeding with sync if already cached');
             }
-          } catch (keyError) {
-            // If private key export fails, we can't cache the viewing key
-            // But we can still try to sync if it's already cached
-            console.warn('Could not cache viewing key, but proceeding with sync if already cached');
+          } else {
+            console.warn('[ZcashModule] syncAddress: Account viewing key is missing or empty');
           }
+        } else {
+          console.warn('[ZcashModule] syncAddress: Address mismatch:', {
+            requested: address.substring(0, 20) + '...',
+            account: account.zAddress?.substring(0, 20) + '...'
+          });
         }
       } catch (accountError) {
+        const accountErrorMsg = accountError instanceof Error ? accountError.message : String(accountError);
+        console.error('[ZcashModule] syncAddress: Failed to get account:', accountErrorMsg);
         // If we can't get the account, the sync will fail with a helpful error
         console.warn('Could not ensure viewing key is cached:', accountError);
       }
     }
     
+    console.log('[ZcashModule] syncAddress: Calling provider.syncAddress()...');
     return await this.provider.syncAddress(address, type);
   }
 
@@ -424,7 +476,6 @@ export class ZcashModule {
       return 'http://localhost:18232';
       
       // Option 3: Public RPC services (may require API key)
-      // - Tatum: https://zcash-testnet.gateway.tatum.io (requires API key)
       // - Other services available at: https://freerpc.com/zcash
     } else {
       // Mainnet - ALWAYS use your own node or trusted service

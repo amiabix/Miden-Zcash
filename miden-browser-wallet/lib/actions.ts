@@ -90,7 +90,7 @@ export async function importNote(noteBytes: any, receiver: string) {
       client,
       Address.fromBech32(receiver).accountId(),
     );
-    sucessTxToast("Received note successfully 🚀", digest);
+    sucessTxToast("Received note successfully", digest);
   } catch (error) {
     console.error("Error importing private note:", error);
   } finally {

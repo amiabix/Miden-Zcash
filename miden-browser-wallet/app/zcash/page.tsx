@@ -148,9 +148,7 @@ export default function ZcashPage() {
       if (errorMsg.includes('listunspent') || errorMsg.includes('not supported') || errorMsg.includes('Method not found')) {
         toast.error(
           'Sync failed: RPC endpoint does not support "listunspent" method.\n\n' +
-          'Tatum API has limited RPC support. To send transactions, you need:\n' +
-          '1. A full Zcash node, or\n' +
-          '2. Use a different RPC endpoint that supports listunspent',
+          'Ensure your local Zcash node is running and supports all RPC methods.',
           { duration: 10000 }
         );
       } else if (errorMsg.includes('429') || errorMsg.includes('Rate limit')) {
@@ -163,6 +161,21 @@ export default function ZcashPage() {
 
   // Loading state - show content even if account is still loading
   // But also show error if initialization failed
+  // Add timeout to prevent infinite loading
+  const [initTimeout, setInitTimeout] = useState(false);
+  
+  useEffect(() => {
+    if (!isInitialized && !zcashError) {
+      const timeout = setTimeout(() => {
+        setInitTimeout(true);
+      }, 10000); // 10 seconds timeout
+      
+      return () => clearTimeout(timeout);
+    } else {
+      setInitTimeout(false);
+    }
+  }, [isInitialized, zcashError]);
+  
   if (!isInitialized && !zcashError) {
     return (
       <div className="container mx-auto p-6">
@@ -172,7 +185,16 @@ export default function ZcashPage() {
               <Skeleton className="h-8 w-64" />
               <Skeleton className="h-4 w-full" />
               <Skeleton className="h-4 w-3/4" />
-              <p className="text-sm text-muted-foreground">Initializing Zcash module...</p>
+              <p className="text-sm text-muted-foreground">
+                {initTimeout 
+                  ? 'Initialization is taking longer than expected. Check browser console for errors.'
+                  : 'Initializing Zcash module...'}
+              </p>
+              {initTimeout && (
+                <Button onClick={() => window.location.reload()} variant="outline" size="sm">
+                  Reload Page
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -268,13 +290,17 @@ export default function ZcashPage() {
               >
                 {accountLoading ? 'Loading...' : 'Load Addresses'}
               </Button>
-              {addresses.tAddress && (
+              {(addresses.tAddress || addresses.zAddress) && (
                 <Button 
                   onClick={() => setShowSendDialog(true)}
-                  disabled={!transparentBalance || transparentBalance.total === 0}
+                  disabled={
+                    (!transparentBalance || transparentBalance.total === 0) &&
+                    (!shieldedBalance || shieldedBalance.total === 0)
+                  }
                   variant="default"
                   title={
-                    (!transparentBalance || transparentBalance.total === 0) 
+                    ((!transparentBalance || transparentBalance.total === 0) &&
+                     (!shieldedBalance || shieldedBalance.total === 0))
                       ? 'No balance available' 
                       : 'Send Zcash'
                   }
@@ -353,7 +379,7 @@ export default function ZcashPage() {
                   onClick={handleSyncTransparent} 
                   disabled={balanceLoading}
                   variant="outline"
-                  title="Sync transparent address to populate UTXO cache. Note: Will fail on Tatum API (doesn't support listunspent)"
+                  title="Sync transparent address to populate UTXO cache"
                 >
                   Sync Transparent Address
                 </Button>

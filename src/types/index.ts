@@ -117,7 +117,7 @@ export interface ZcashProviderConfig {
     username: string;
     password: string;
   };
-  /** API key for services that use header-based auth (e.g., Tatum) */
+  /** API key for services that use header-based auth */
   rpcApiKey?: string;
   /** Lightwalletd URL for shielded operations (tree states, compact blocks, witness data) */
   lightwalletdUrl?: string;

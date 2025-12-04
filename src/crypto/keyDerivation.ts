@@ -391,19 +391,61 @@ export class ZcashKeyDerivation {
    * - pk_d = [ivk] * DiversifyHash(d) (Jubjub scalar multiplication)
    */
   generateShieldedAddress(ivk: Uint8Array): string {
-    // Generate diversifier (11 bytes)
-    const diversifier = this.deriveDiversifier(ivk, 0);
+    try {
+      // Validate ivk input
+      if (!ivk || ivk.length !== 32) {
+        throw new Error(`Invalid ivk: expected 32 bytes, got ${ivk?.length || 0}`);
+      }
 
-    // Derive payment key (pkd) using correct Zcash spec:
-    // pk_d = [ivk] * DiversifyHash(d)
-    // This is a Jubjub scalar multiplication, NOT a hash!
-    const pkd = derivePkd(ivk, diversifier);
+      // Generate diversifier (11 bytes)
+      const diversifier = this.deriveDiversifier(ivk, 0);
 
-    // Combine diversifier and pkd
-    const addressData = concatBytes(diversifier, pkd);
+      // Validate diversifier length
+      if (!diversifier || diversifier.length !== 11) {
+        throw new Error(`Invalid diversifier length: expected 11 bytes, got ${diversifier?.length || 0}`);
+      }
 
-    // Bech32 encode
-    return bech32Encode(this.networkVersions.saplingHRP, addressData);
+      // Derive payment key (pkd) using correct Zcash spec:
+      // pk_d = [ivk] * DiversifyHash(d)
+      // This is a Jubjub scalar multiplication, NOT a hash!
+      let pkd: Uint8Array;
+      try {
+        pkd = derivePkd(ivk, diversifier);
+      } catch (pkdError) {
+        const pkdErrorMsg = pkdError instanceof Error ? pkdError.message : String(pkdError);
+        throw new Error(`Failed to derive pkd: ${pkdErrorMsg}`);
+      }
+
+      // Validate pkd length
+      if (!pkd || pkd.length !== 32) {
+        throw new Error(`Invalid pkd length: expected 32 bytes, got ${pkd?.length || 0}`);
+      }
+
+      // Combine diversifier and pkd
+      const addressData = concatBytes(diversifier, pkd);
+      
+      if (!addressData || addressData.length !== 43) {
+        throw new Error(`Invalid address data length: expected 43 bytes (11 diversifier + 32 pkd), got ${addressData?.length || 0}`);
+      }
+
+      // Bech32 encode
+      const address = bech32Encode(this.networkVersions.saplingHRP, addressData);
+      
+      if (!address || address.length === 0) {
+        throw new Error('Bech32 encoding returned empty address');
+      }
+
+      return address;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error('[ZcashKeyDerivation] Failed to generate shielded address:', {
+        error: errorMsg,
+        ivkLength: ivk?.length,
+        network: this.network,
+        hrp: this.networkVersions.saplingHRP
+      });
+      throw new Error(`Failed to generate shielded address: ${errorMsg}`);
+    }
   }
 
   /**

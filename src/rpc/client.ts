@@ -16,7 +16,7 @@ export interface RPCConfig {
     username: string;
     password: string;
   };
-  /** API key for services that use header-based auth (e.g., Tatum) */
+  /** API key for services that use header-based auth */
   apiKey?: string;
   /** Custom headers to include in requests */
   headers?: Record<string, string>;
@@ -51,7 +51,7 @@ export class ZcashRPCClient {
   private config: ResolvedConfig;
   private requestId: number = 0;
   private lastRequestTime: number = 0;
-  private minRequestInterval: number = 20000; // Minimum 20 seconds between requests (3 req/min for Tatum free tier)
+  private minRequestInterval: number = 20000; // Minimum 20 seconds between requests
   private rateLimitBackoff: number = 0; // Exponential backoff for rate limits
 
   constructor(config: RPCConfig) {
@@ -191,7 +191,7 @@ export class ZcashRPCClient {
     }
 
     // Add API key header if provided
-    // NOWNodes uses 'api-key', Tatum uses 'x-api-key'
+    // NOWNodes uses 'api-key', others use 'x-api-key'
     if (this.config.apiKey) {
       const isNOWNodes = this.config.endpoint.includes('nownodes.io');
       headers[isNOWNodes ? 'api-key' : 'x-api-key'] = this.config.apiKey;
@@ -418,9 +418,6 @@ export class ZcashRPCClient {
    * If both fail, returns 0 (allows wallet to work in limited RPC mode)
    */
   async getBalance(address: string, minconf: number = 1): Promise<number> {
-    // Check if using Tatum (rate limited - don't try fallback methods)
-    const isTatum = this.config.endpoint?.includes('tatum');
-    
     try {
       // Try standard method first
       return await this.sendRequest('getreceivedbyaddress', [address, minconf]);
@@ -442,28 +439,7 @@ export class ZcashRPCClient {
         errorMessage.includes('getreceivedbyaddress') ||
         errorMessage.includes('not found');
       
-      // For Tatum: Try fallback with listunspent
-      if (isTatum && isMethodNotFound) {
-        try {
-          // Fallback: calculate from UTXOs (Tatum supports listunspent)
-          const utxos = await this.listUnspent(minconf, 9999999, [address]);
-          return utxos.reduce((sum, utxo) => sum + utxo.amount, 0);
-        } catch (utxoError: any) {
-          // If listunspent also fails, return 0
-          const utxoErrorMessage = utxoError?.message || String(utxoError || '');
-          const utxoErrorCode = utxoError?.code || (utxoError as any)?.code;
-          
-          // If rate limited, throw to trigger backoff
-          if (utxoErrorCode === 429 || utxoErrorMessage.includes('429') || utxoErrorMessage.includes('Rate limit')) {
-            throw utxoError;
-          }
-          
-          // Otherwise return 0 for Tatum
-          return 0;
-        }
-      }
-      
-      // For local node: Try fallback
+      // Try fallback with listunspent
       if (isMethodNotFound) {
         try {
           // Fallback: calculate from UTXOs
@@ -516,14 +492,89 @@ export class ZcashRPCClient {
   }
 
   /**
+   * Import address into wallet
+   * This is required for local zcashd nodes to discover UTXOs via listunspent
+   * 
+   * Parameters:
+   * - address: Address to import
+   * - label: Optional label (default: '')
+   * - rescan: Whether to rescan blockchain (default: false)
+   * - watchonly: Whether to import as watch-only (default: true)
+   */
+  async importAddress(
+    address: string,
+    label: string = '',
+    rescan: boolean = false,
+    watchonly: boolean = true
+  ): Promise<void> {
+    try {
+      // Try with watchonly parameter (zcashd format)
+      await this.sendRequest('importaddress', [address, label, rescan, watchonly]);
+      console.log(`[RPC Client] Successfully imported address ${address.substring(0, 20)}...`);
+    } catch (error: any) {
+      const errorMsg = error?.message || String(error || '');
+      // If address is already imported, that's fine - ignore the error
+      if (errorMsg.includes('already in wallet') || 
+          errorMsg.includes('already exists') ||
+          errorMsg.includes('already have') ||
+          errorMsg.includes('duplicate')) {
+        console.log(`[RPC Client] Address ${address.substring(0, 20)}... already imported`);
+        return;
+      }
+      // Try without watchonly parameter (some versions)
+      try {
+        await this.sendRequest('importaddress', [address, label, rescan]);
+        console.log(`[RPC Client] Successfully imported address ${address.substring(0, 20)}... (without watchonly)`);
+      } catch (retryError: any) {
+        const retryErrorMsg = retryError?.message || String(retryError || '');
+        if (retryErrorMsg.includes('already in wallet') || 
+            retryErrorMsg.includes('already exists') ||
+            retryErrorMsg.includes('already have') ||
+            retryErrorMsg.includes('duplicate')) {
+          console.log(`[RPC Client] Address ${address.substring(0, 20)}... already imported`);
+          return;
+        }
+        // Re-throw the original error
+        throw error;
+      }
+    }
+  }
+
+  /**
    * List unspent outputs (UTXOs)
+   * 
+   * Note: zcashd returns amounts in ZEC, we convert to zatoshi (1 ZEC = 100,000,000 zatoshi)
    */
   async listUnspent(
     minconf: number = 1,
     maxconf: number = 9999999,
     addresses: string[] = []
   ): Promise<UTXO[]> {
-    return this.sendRequest('listunspent', [minconf, maxconf, addresses]);
+    const result = await this.sendRequest('listunspent', [minconf, maxconf, addresses]);
+    
+    // Convert amounts from ZEC to zatoshi
+    // zcashd returns amounts as decimal ZEC (e.g., 0.3), we need zatoshi (e.g., 30000000)
+    const converted = result.map((utxo: any) => {
+      const amountZEC = utxo.amount;
+      const amountZatoshi = Math.round(amountZEC * 100000000);
+      
+      if (amountZEC < 1 && amountZatoshi === 0 && amountZEC > 0) {
+        console.warn(`[RPC Client] Small UTXO amount detected: ${amountZEC} ZEC = ${amountZatoshi} zatoshi (may be rounded to 0)`);
+      }
+      
+      return {
+        ...utxo,
+        amount: amountZatoshi
+      };
+    });
+    
+    if (converted.length > 0) {
+      const totalZEC = result.reduce((sum: number, utxo: any) => sum + utxo.amount, 0);
+      const totalZatoshi = converted.reduce((sum: number, utxo: any) => sum + utxo.amount, 0);
+      console.log(`[RPC Client] Converted ${converted.length} UTXO(s): ${totalZEC} ZEC = ${totalZatoshi} zatoshi`);
+    }
+    
+    return converted;
   }
 
   /**

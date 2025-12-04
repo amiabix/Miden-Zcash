@@ -572,7 +572,7 @@ export default function ZcashExplorerPage() {
                 <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-md border border-yellow-200 dark:border-yellow-800">
                   <p className="text-xs text-yellow-800 dark:text-yellow-200">
                     {decryptionStats.failures > decryptionStats.successes 
-                      ? '⚠️ Warning: High failure rate. Nonce derivation may be incorrect. See NONCE_DERIVATION_DOCUMENTATION.md for details.'
+                      ? 'Warning: High failure rate. Nonce derivation may be incorrect. See NONCE_DERIVATION_DOCUMENTATION.md for details.'
                       : 'Some notes failed to decrypt. This may be normal if notes are not for this viewing key.'}
                   </p>
                   <p className="text-xs text-yellow-700 dark:text-yellow-300 mt-2">

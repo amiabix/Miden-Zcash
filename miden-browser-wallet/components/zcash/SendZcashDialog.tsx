@@ -87,15 +87,12 @@ export function SendZcashDialog({
   }, [open, fromAddress, fromAddressType]);
 
   const validateAddress = (address: string): { valid: boolean; error?: string } => {
-    // Input sanitization: trim whitespace
     const sanitized = address?.trim() || '';
 
     if (!sanitized) {
       return { valid: false, error: 'Address is required' };
     }
 
-    // Fallback: prefix-only validation (less secure, but better than nothing)
-    // SDK validation can be overly strict in some cases, so we use fallback first
     if (toType === 'transparent') {
       if (!sanitized.startsWith('t') && !sanitized.startsWith('tm')) {
         return { valid: false, error: 'Invalid transparent address format' };
@@ -106,19 +103,14 @@ export function SendZcashDialog({
       }
     }
 
-    // Use SDK validation if available (includes checksum validation)
     if (validateAddressSDK) {
       try {
         const result = validateAddressSDK(sanitized);
         if (!result.valid) {
           console.warn('[SendZcashDialog] SDK validation failed:', result);
-          // Address prefix is valid, but SDK validation failed
-          // This could be a checksum issue - log but allow with prefix validation
         } else {
-          // Network validation: check if address matches configured network
           if (zcashModule && isAddressForNetworkSDK) {
             try {
-              // Get network from module
               const network = zcashModule.getNetwork ? zcashModule.getNetwork() : 'testnet';
               if (!isAddressForNetworkSDK(sanitized, network)) {
                 return {
@@ -127,14 +119,11 @@ export function SendZcashDialog({
                 };
               }
             } catch (networkErr) {
-              // Network validation failed, but address format is valid
               console.warn('Network validation failed:', networkErr);
             }
           }
 
-          // Type validation: check if address type matches selected type
           if (result.type !== toType && result.type !== 'orchard') {
-            // Allow orchard addresses for shielded type
             if (toType === 'shielded' && result.type === 'orchard') {
               return { valid: true };
             }
@@ -146,7 +135,6 @@ export function SendZcashDialog({
         }
       } catch (err) {
         console.error('SDK validation error:', err);
-        // Continue with prefix validation since SDK validation errored
       }
     }
 
@@ -175,7 +163,10 @@ export function SendZcashDialog({
     }
 
     // Check balance
+    // Note: transparentBalance and shieldedBalance are in zatoshi (not ZEC)
     const availableBalance = fromType === 'transparent' ? transparentBalance : shieldedBalance;
+    console.log(`[SendZcashDialog] Available balance: ${availableBalance} zatoshi (${(availableBalance / 100000000).toFixed(8)} ZEC) for ${fromType} address`);
+    
     if (availableBalance <= 0) {
       toast.error(`Insufficient ${fromType} balance`);
       setSending(false);
@@ -199,49 +190,39 @@ export function SendZcashDialog({
     try {
       setSending(true);
 
-      // Convert ZEC to zatoshi using BigInt to avoid float precision loss
-      // Parse the amount string directly to avoid floating point errors
       const amountStr = amount.trim();
       
-      // Validate format: must be a valid decimal number
       if (!/^\d+(\.\d{1,8})?$/.test(amountStr)) {
         toast.error('Invalid amount format. Use numbers only (e.g., 0.12345678)');
         setSending(false);
         return;
       }
       
-      // Split into integer and fractional parts
       const parts = amountStr.split('.');
       const integerPart = parts[0] || '0';
       let fractionalPart = parts[1] || '';
       
-      // Pad fractional part to 8 decimal places (zatoshi precision)
       while (fractionalPart.length < 8) {
         fractionalPart += '0';
       }
       
-      // Truncate to 8 decimal places if longer
       if (fractionalPart.length > 8) {
         fractionalPart = fractionalPart.substring(0, 8);
       }
       
-      // Combine integer and fractional parts as a string, then convert to BigInt
       const zatoshiString = integerPart + fractionalPart;
       const amountZatoshi = BigInt(zatoshiString);
       
-      // Validate minimum amount: 1 zatoshi = 0.00000001 ZEC
       if (amountZatoshi <= BigInt(0)) {
         toast.error('Amount too small. Minimum is 1 zatoshi (0.00000001 ZEC)');
         setSending(false);
         return;
       }
       
-      // Convert BigInt to number for transaction (zatoshi fits in safe integer range)
       const amountZatoshiNumber = Number(amountZatoshi);
 
-      // Convert fee to zatoshi
       const feeStr = fee.trim();
-      let feeZatoshi = 10000; // Default: 0.0001 ZEC
+      let feeZatoshi = 10000;
       if (feeStr && /^\d+(\.\d{1,8})?$/.test(feeStr)) {
         const feeParts = feeStr.split('.');
         const feeInteger = feeParts[0] || '0';
@@ -255,12 +236,57 @@ export function SendZcashDialog({
         feeZatoshi = Number(BigInt(feeInteger + feeFractional));
       }
 
-      // Check if amount + fee exceeds balance
       const totalRequired = amountZatoshiNumber + feeZatoshi;
+      console.log(`[SendZcashDialog] Transaction requirements: ${amountZatoshiNumber} zatoshi (amount) + ${feeZatoshi} zatoshi (fee) = ${totalRequired} zatoshi total`);
+      console.log(`[SendZcashDialog] Available: ${availableBalance} zatoshi, Required: ${totalRequired} zatoshi`);
+      
       if (totalRequired > availableBalance) {
         toast.error(`Insufficient balance. Required: ${(totalRequired / 100000000).toFixed(8)} ZEC (amount + fee), Available: ${(availableBalance / 100000000).toFixed(8)} ZEC`);
         setSending(false);
         return;
+      }
+
+      if (fromType === 'transparent') {
+        const provider = zcashModule.getProvider();
+        const utxoCache = (provider as any).utxoCache;
+        
+        if (utxoCache) {
+          let utxos = utxoCache.getUTXOs(actualFromAddress);
+          
+          if (!utxos || utxos.length === 0) {
+            toast.info('Syncing transparent address to discover UTXOs...');
+            
+            try {
+              const syncResult = await provider.syncAddress(actualFromAddress, 'transparent');
+              
+              utxos = utxoCache.getUTXOs(actualFromAddress);
+              
+              if (!utxos || utxos.length === 0) {
+                if (syncResult.updatedBalance.total === 0) {
+                  throw new Error(
+                    `No UTXOs found. The address has not received any funds.\n\n` +
+                    `Please send funds to ${actualFromAddress.substring(0, 20)}... first.`
+                  );
+                } else {
+                  throw new Error(
+                    `No UTXOs available after sync. Balance: ${(syncResult.updatedBalance.total / 100000000).toFixed(8)} ZEC.\n\n` +
+                    `Possible causes:\n` +
+                    `1. The address has not received any confirmed transactions\n` +
+                    `2. All UTXOs have been spent\n` +
+                    `3. The node is still scanning the blockchain\n\n` +
+                    `Note: The address has been automatically imported. If you just received funds, wait for the transaction to confirm (6+ confirmations).`
+                  );
+                }
+              }
+              
+              toast.success(`Sync complete. Found ${utxos.length} UTXO(s) with ${(syncResult.updatedBalance.total / 100000000).toFixed(8)} ZEC`);
+            } catch (syncError: any) {
+              const syncErrorMsg = syncError?.message || 'Failed to sync transparent address';
+              console.error('[SendZcashDialog] Auto-sync failed:', syncError);
+              throw syncError;
+            }
+          }
+        }
       }
 
       console.log('[SendZcashDialog] Sending transaction:', {
@@ -273,7 +299,6 @@ export function SendZcashDialog({
         toType
       });
 
-      // Build and sign transaction (use sanitized address)
       const signedTx = await zcashModule.buildAndSignTransaction(midenAccountId, {
         from: {
           address: actualFromAddress.trim(),
@@ -290,13 +315,11 @@ export function SendZcashDialog({
 
       console.log('[SendZcashDialog] Transaction signed, broadcasting...');
 
-      // Broadcast transaction
       const result = await zcashModule.broadcastTransaction(signedTx);
       
       setTxHash(result.hash);
-      toast.success(`Transaction sent! Hash: ${result.hash}`);
+      toast.success(`Transaction sent. Hash: ${result.hash}`);
       
-      // Reset form after short delay
       setTimeout(() => {
         setToAddress('');
         setAmount('');
@@ -307,46 +330,26 @@ export function SendZcashDialog({
       console.error('[SendZcashDialog] Send failed:', err);
       let errorMsg = err?.message || 'Failed to send transaction';
       
-      // Provide helpful error messages for common issues
-      if (errorMsg.includes('listunspent') || errorMsg.includes('not supported') || errorMsg.includes('Cannot build transaction')) {
-        errorMsg = `❌ Cannot Send: RPC Limitation\n\n` +
-          `Your RPC endpoint (Tatum API) doesn't support the 'listunspent' method required for transparent transactions.\n\n` +
-          `Solutions:\n` +
-          `1. Use a full Zcash node (supports all RPC methods)\n` +
-          `2. For testnet: Set up a local zcashd node\n` +
-          `3. For mainnet: Use a full node RPC endpoint\n\n` +
-          `Note: Tatum API has limited RPC support and cannot build transparent transactions.`;
+      if (errorMsg.includes('listunspent') || errorMsg.includes('not supported') || errorMsg.includes('Cannot build transaction') || errorMsg.includes('RPC Limitation')) {
+        errorMsg = errorMsg;
       } else if (errorMsg.includes('No UTXOs') || errorMsg.includes('UTXO')) {
-        errorMsg = `❌ No UTXOs Available\n\n` +
-          `Your transparent address hasn't been synced yet.\n\n` +
-          `To send transparent transactions:\n` +
-          `1. Close this dialog\n` +
-          `2. Click the "Sync Transparent Address" button\n` +
-          `3. Wait for the sync to complete\n` +
-          `4. Then try sending again\n\n` +
-          `Note: UTXO sync caches spendable outputs from the blockchain. This must be done before sending transparent transactions.`;
+        errorMsg = errorMsg;
       } else if (errorMsg.includes('No shielded notes found') || errorMsg.includes('hasn\'t scanned')) {
-        errorMsg = `❌ No Shielded Notes Found\n\n` +
-          `Your shielded address hasn't been synced yet.\n\n` +
-          `To send shielded transactions:\n` +
-          `1. Click "Sync Shielded Address" button\n` +
-          `2. This scans the blockchain to discover your notes\n` +
-          `3. Once notes are found, you can send transactions\n\n` +
-          `Note: You need to have received shielded transactions first, or sync will find no notes.`;
-      } else if (errorMsg.includes('Insufficient shielded funds')) {
-        // Keep the original message which now includes helpful context
-        errorMsg = errorMsg;
+        errorMsg = `No Shielded Notes Found\n\n` +
+          `The shielded address has not been synced.\n\n` +
+          `Required actions:\n` +
+          `1. Click "Sync Shielded Address"\n` +
+          `2. Wait for blockchain scan to complete\n` +
+          `3. Retry sending transaction after notes are discovered\n\n` +
+          `Note: Shielded transactions must be received before notes can be discovered.`;
       } else if (errorMsg.includes('reindexing') || errorMsg.includes('disabled while reindexing')) {
-        errorMsg = `❌ Node is Reindexing\n\n` +
-          `Your Zcash node is currently reindexing blocks and has disabled wallet operations.\n\n` +
-          `This means:\n` +
-          `- The node is catching up with the blockchain\n` +
-          `- Wallet operations (listunspent, sendrawtransaction) are temporarily disabled\n` +
-          `- You need to wait for reindexing to complete\n\n` +
-          `Once reindexing finishes, you'll be able to send transactions.`;
-      } else if (errorMsg.includes('Insufficient')) {
-        // Keep the original insufficient funds message
-        errorMsg = errorMsg;
+        errorMsg = `Node is Reindexing\n\n` +
+          `The Zcash node is currently reindexing blocks. Wallet operations are disabled during this process.\n\n` +
+          `Implications:\n` +
+          `- The node is synchronizing with the blockchain\n` +
+          `- Wallet operations (listunspent, sendrawtransaction) are temporarily unavailable\n` +
+          `- Reindexing must complete before transactions can be sent\n\n` +
+          `Transaction sending will be available after reindexing completes.`;
       }
       
       setError(errorMsg);
@@ -379,7 +382,6 @@ export function SendZcashDialog({
               onChange={(e) => {
                 const newFromType = e.target.value as 'transparent' | 'shielded';
                 setFromType(newFromType);
-                // Check if address is available
                 const addr = newFromType === 'transparent' ? tAddress : zAddress;
                 if (!addr) {
                   toast.error(`No ${newFromType} address available`);
@@ -437,12 +439,10 @@ export function SendZcashDialog({
               type="text"
               value={toAddress}
               onChange={(e) => {
-                // Auto-trim whitespace on input
                 const trimmed = e.target.value.trim();
                 setToAddress(trimmed || e.target.value);
               }}
               onBlur={(e) => {
-                // Trim on blur to clean up any trailing whitespace
                 const trimmed = e.target.value.trim();
                 if (trimmed !== e.target.value) {
                   setToAddress(trimmed);
@@ -467,7 +467,6 @@ export function SendZcashDialog({
               value={amount}
               onChange={(e) => {
                 const val = e.target.value;
-                // Prevent scientific notation in input
                 if (val.includes('e') || val.includes('E')) {
                   const num = parseFloat(val);
                   if (!isNaN(num)) {

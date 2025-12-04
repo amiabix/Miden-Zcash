@@ -163,10 +163,25 @@ export class MidenKeyBridge {
     // 3. Derive Zcash keys
     let derivedKeys;
     try {
+      console.log('[MidenKeyBridge] Deriving Zcash keys for account:', midenAccountId);
       derivedKeys = this.keyDerivation.deriveKeys(
         midenAccountId,
-        midenPrivateKey
+        midenPrivateKey,
+        0
       );
+      console.log('[MidenKeyBridge] Keys derived successfully:', {
+        tAddress: derivedKeys.tAddress?.substring(0, 20) + '...',
+        zAddress: derivedKeys.zAddress?.substring(0, 20) + '...',
+        hasSpendingKey: !!derivedKeys.spendingKey,
+        hasViewingKey: !!derivedKeys.viewingKey,
+        tAddressLength: derivedKeys.tAddress?.length,
+        zAddressLength: derivedKeys.zAddress?.length
+      });
+    } catch (keyError) {
+      const errorMsg = keyError instanceof Error ? keyError.message : String(keyError);
+      console.error('[MidenKeyBridge] Failed to derive Zcash keys:', errorMsg);
+      console.error('[MidenKeyBridge] Error stack:', keyError instanceof Error ? keyError.stack : 'No stack');
+      throw new Error(`Failed to derive Zcash keys: ${errorMsg}`);
     } finally {
       // Scrub private key from memory after use
       if (midenPrivateKey) {

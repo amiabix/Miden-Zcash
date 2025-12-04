@@ -87,17 +87,59 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
   const refreshAccount = useCallback(async (zcashModule?: ZcashModule) => {
     const moduleToUse = zcashModule || module;
     if (!moduleToUse) {
+      console.warn('[ZcashProvider] refreshAccount: No module available');
       return;
     }
 
     try {
+      console.log('[ZcashProvider] refreshAccount: Starting...');
       setAccountLoading(true);
       setAccountError(null);
 
       const zcashAccount = await moduleToUse.getActiveZcashAccount();
+      console.log('[ZcashProvider] refreshAccount: Account loaded:', {
+        tAddress: zcashAccount.tAddress?.substring(0, 20) + '...',
+        zAddress: zcashAccount.zAddress?.substring(0, 20) + '...',
+        hasViewingKey: !!(zcashAccount.viewingKey && zcashAccount.viewingKey.length > 0)
+      });
+      
+      // CRITICAL: Cache the viewing key directly in the provider
+      // We have the viewing key from the account object, so we can cache it directly
+      // This avoids needing to call getAddresses() which requires private key export
+      if (zcashAccount.zAddress && zcashAccount.viewingKey && zcashAccount.viewingKey.length > 0) {
+        try {
+          const provider = moduleToUse.getProvider();
+          // Use the public method to cache the viewing key
+          provider.cacheViewingKey(zcashAccount.zAddress, zcashAccount.viewingKey, zcashAccount.midenAccountId);
+          // Also cache the transparent address mapping
+          (provider as any).addressToAccountId?.set(zcashAccount.tAddress, zcashAccount.midenAccountId);
+          console.log('[ZcashProvider] refreshAccount: Viewing key cached successfully');
+        } catch (cacheError: any) {
+          console.warn('[ZcashProvider] refreshAccount: Could not cache viewing key directly:', cacheError);
+          // Fallback: Try using module.getAddresses() which requires private key export
+          try {
+            console.log('[ZcashProvider] refreshAccount: Falling back to module.getAddresses()...');
+            await moduleToUse.getAddresses(zcashAccount.midenAccountId);
+            console.log('[ZcashProvider] refreshAccount: Viewing key cached via module.getAddresses()');
+          } catch (fallbackError: any) {
+            const fallbackErrorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            console.warn('[ZcashProvider] refreshAccount: Fallback also failed:', fallbackErrorMsg);
+            // Don't fail - the viewing key will be cached when syncAddress() is called
+          }
+        }
+      } else {
+        console.warn('[ZcashProvider] refreshAccount: Account missing zAddress or viewingKey', {
+          hasZAddress: !!zcashAccount.zAddress,
+          hasViewingKey: !!(zcashAccount.viewingKey && zcashAccount.viewingKey.length > 0),
+          viewingKeyLength: zcashAccount.viewingKey?.length || 0
+        });
+      }
+      
       setAccount(zcashAccount);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
+      console.error('[ZcashProvider] refreshAccount: Error:', error.message);
+      console.error('[ZcashProvider] refreshAccount: Error stack:', error.stack);
       setAccountError(error);
       setAccount(null);
     } finally {
@@ -239,6 +281,13 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
       }
 
       console.log('[ZcashProvider] Starting Zcash initialization...');
+      const useBackendProxy = process.env.NEXT_PUBLIC_USE_BACKEND_RPC_PROXY === 'true' || 
+                              !process.env.NEXT_PUBLIC_ZCASH_RPC_ENDPOINT;
+      const configuredEndpoint = process.env.NEXT_PUBLIC_ZCASH_RPC_ENDPOINT;
+      const defaultEndpoint = 'http://localhost:18232';
+      const rpcEndpoint = configuredEndpoint || defaultEndpoint;
+      console.log('[ZcashProvider] RPC endpoint:', useBackendProxy ? '/api/zcash/rpc' : rpcEndpoint);
+      
       // Add timeout to prevent hanging
       const initPromise = initializeZcash();
       const timeoutPromise = new Promise<never>((_, reject) => 
@@ -247,6 +296,8 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
       
       const zcashModule = await Promise.race([initPromise, timeoutPromise]);
       console.log('[ZcashProvider] Zcash initialization successful');
+      console.log('[ZcashProvider] Module network:', zcashModule.getNetwork());
+      console.log('[ZcashProvider] RPC connected:', zcashModule.isRPCConnected());
       setModule(zcashModule);
       setIsInitialized(true);
       setNetwork(zcashModule.getNetwork());
@@ -260,9 +311,9 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
           if (provider && (provider as any).utxoCache) {
             (window as any).__zcashProvider = provider;
             (window as any).__zcashUtxoCache = (provider as any).utxoCache;
-            console.log('[ZcashProvider] ✅ Exposed provider to window.__zcashProvider');
-            console.log('[ZcashProvider] ✅ Exposed UTXO cache to window.__zcashUtxoCache');
-            console.log('[ZcashProvider] 💡 For manual UTXO entry (during node reindexing), use:');
+            console.log('[ZcashProvider] Exposed provider to window.__zcashProvider');
+            console.log('[ZcashProvider] Exposed UTXO cache to window.__zcashUtxoCache');
+            console.log('[ZcashProvider] For manual UTXO entry (during node reindexing), use:');
             console.log('[ZcashProvider]    window.__zcashUtxoCache.addUTXO(address, utxo, blockHeight)');
           }
         } catch (exposeError) {
@@ -331,14 +382,14 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
       // Initialize immediately (non-blocking) - don't wait for wallet
       // The initialization function will handle wallet readiness internally
       initialize().catch((err) => {
-        console.error('Zcash initialization error:', err);
-        // Only set error for critical failures, not timeouts or initialization delays
+        console.error('[ZcashProvider] Initialization error:', err);
         const errorMsg = err instanceof Error ? err.message : String(err);
-        if (!errorMsg.includes('Timeout') && 
-            !errorMsg.includes('still initializing') &&
-            !errorMsg.includes('recursive use')) {
-          setError(errorMsg);
-        }
+        
+        // Set error for all failures so user knows what happened
+        // But allow page to render so they can see the error
+        setError(errorMsg);
+        setIsInitialized(false);
+        initRef.current = false; // Allow retry
       });
     };
 

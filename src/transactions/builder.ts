@@ -217,6 +217,24 @@ export class ZcashTransactionBuilder {
     const estimatedFee = fee || this.config.minimumFee;
 
     console.log(`[TransactionBuilder] Selecting UTXOs: ${utxos.length} available, need ${amount} zatoshi + ${estimatedFee} zatoshi fee = ${amount + estimatedFee} zatoshi`);
+    
+    // CRITICAL: Ensure all UTXO amounts are in zatoshi (not ZEC)
+    // If any amount is < 1, it's in ZEC format and needs conversion
+    const needsConversion = utxos.some((u: any) => u.amount > 0 && u.amount < 1);
+    if (needsConversion) {
+      console.warn(`[TransactionBuilder] CRITICAL: Detected UTXOs with ZEC amounts (< 1), converting to zatoshi...`);
+      utxos = utxos.map((u: any) => {
+        if (u.amount > 0 && u.amount < 1) {
+          const converted = Math.round(u.amount * 100000000);
+          console.warn(`[TransactionBuilder] Converting UTXO ${u.txid?.substring(0, 16)}...: ${u.amount} ZEC → ${converted} zatoshi`);
+          return {
+            ...u,
+            amount: converted
+          };
+        }
+        return u;
+      });
+    }
 
     for (const utxo of utxos) {
       selected.push({
@@ -228,7 +246,7 @@ export class ZcashTransactionBuilder {
       });
 
       total += utxo.amount;
-      console.log(`[TransactionBuilder] Selected UTXO: ${utxo.txid.substring(0, 16)}... vout ${utxo.vout}, amount: ${utxo.amount} zatoshi, running total: ${total} zatoshi`);
+      console.log(`[TransactionBuilder] Selected UTXO: ${utxo.txid.substring(0, 16)}... vout ${utxo.vout}, amount: ${utxo.amount} zatoshi (${(utxo.amount / 100000000).toFixed(8)} ZEC), running total: ${total} zatoshi`);
 
       if (total >= amount + estimatedFee) {
         console.log(`[TransactionBuilder] Sufficient UTXOs selected: ${total} zatoshi >= ${amount + estimatedFee} zatoshi`);
@@ -237,12 +255,39 @@ export class ZcashTransactionBuilder {
     }
 
     if (total < amount + estimatedFee) {
+      // CRITICAL CHECK: If total is < 1, amounts are in ZEC format (should never happen)
+      if (total > 0 && total < 1) {
+        console.error(`[TransactionBuilder] CRITICAL: Total is ${total} which appears to be in ZEC format!`);
+        console.error(`[TransactionBuilder] UTXO details:`, utxos.map((u: any) => ({
+          txid: u.txid?.substring(0, 16) + '...',
+          vout: u.vout,
+          amount: u.amount,
+          amountZEC: (u.amount / 100000000).toFixed(8),
+          isZEC: u.amount > 0 && u.amount < 1
+        })));
+        throw new Error(
+          `CRITICAL: UTXO amounts are in ZEC format instead of zatoshi!\n\n` +
+          `Detected total: ${total} (appears to be ZEC, should be zatoshi)\n` +
+          `This indicates the amount conversion from ZEC to zatoshi failed.\n\n` +
+          `Please try:\n` +
+          `1. Clear browser cache and hard refresh (Cmd+Shift+R on Mac, Ctrl+Shift+R on Windows)\n` +
+          `2. Click "Sync Transparent Address" again to refresh UTXOs\n` +
+          `3. Try sending the transaction again`
+        );
+      }
+      
       const totalZEC = (total / 100000000).toFixed(8);
       const requiredZEC = ((amount + estimatedFee) / 100000000).toFixed(8);
       const totalZatoshi = total;
       const requiredZatoshi = amount + estimatedFee;
       
       console.error(`[TransactionBuilder] Insufficient UTXOs: total=${totalZatoshi} zatoshi (${totalZEC} ZEC), required=${requiredZatoshi} zatoshi (${requiredZEC} ZEC)`);
+      console.error(`[TransactionBuilder] UTXO details:`, utxos.map((u: any) => ({
+        txid: u.txid?.substring(0, 16) + '...',
+        vout: u.vout,
+        amount: u.amount,
+        amountZEC: (u.amount / 100000000).toFixed(8)
+      })));
       
       throw new Error(
         `Insufficient funds: ${totalZatoshi} zatoshi (${totalZEC} ZEC) < ${requiredZatoshi} zatoshi (${requiredZEC} ZEC)\n\n` +
@@ -251,7 +296,7 @@ export class ZcashTransactionBuilder {
         `Possible causes:\n` +
         `1. Not enough UTXOs to cover the transaction amount and fee\n` +
         `2. UTXOs may not have been discovered yet - try syncing the address first\n` +
-        `3. Address may not be imported into the wallet - ensure address is imported`
+        `3. Address may need to be imported into the wallet - ensure address is imported`
       );
     }
 
