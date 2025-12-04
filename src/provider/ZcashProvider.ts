@@ -107,7 +107,7 @@ export class ZcashProvider {
   
   // Balance cache (address -> Balance)
   private balanceCache: Map<string, { balance: Balance; timestamp: number }> = new Map();
-  private balanceCacheTTL = 600000; // 10 minutes (increased for Tatum free tier - 3 calls limit)
+  private balanceCacheTTL = 600000; // 10 minutes
 
   constructor(config: ProviderConfig) {
     this.config = { ...DEFAULT_CONFIG, ...config } as ProviderConfig;
@@ -419,7 +419,9 @@ export class ZcashProvider {
         };
       }
       
-      // Get shielded balance via RPC
+      // Try RPC z_getbalance (may be deprecated/disabled, but try anyway)
+      // Note: z_getbalance is deprecated in newer zcashd versions
+      // We primarily rely on note cache which is populated by scanning
       try {
         const confirmed = await this.rpcClient.zGetBalance(finalAddress, 1);
         // Get total balance (minconf=0) to calculate unconfirmed
@@ -442,16 +444,33 @@ export class ZcashProvider {
 
         return balance;
       } catch (error: any) {
-        // If z_getBalance fails (method not supported or RPC error), 
-        // return note cache balance (which may be 0 if no notes discovered yet)
+        const errorMsg = error?.message || String(error || '');
+        // z_getbalance is deprecated/disabled in newer zcashd versions
+        // This is expected - we rely on note cache instead
+        if (errorMsg.includes('DISABLED') || errorMsg.includes('deprecated') || errorMsg.includes('z_getbalance')) {
+          console.log(`[ZcashProvider] z_getbalance is deprecated/disabled - using note cache balance for ${finalAddress.substring(0, 20)}...`);
+        } else {
+          console.warn(`[ZcashProvider] z_getbalance failed: ${errorMsg}`);
+        }
+        
+        // Return note cache balance (populated by scanning)
+        // This is the primary method for getting shielded balance
         const fallbackBalance = this.noteCache.getBalance(finalAddress);
-        return {
+        const balance: Balance = {
           confirmed: fallbackBalance.total,
           unconfirmed: 0,
           total: fallbackBalance.total,
           pending: 0,
           unit: 'zatoshi'
         };
+        
+        // Cache the balance from note cache
+        this.balanceCache.set(finalAddress, {
+          balance,
+          timestamp: Date.now()
+        });
+        
+        return balance;
       }
     }
     
@@ -536,6 +555,9 @@ export class ZcashProvider {
     // Determine transaction type
     const fromType = sanitizedParams.from.type;
     const toType = sanitizedParams.to.type;
+
+    // Log to diagnose unit mismatch issue
+    console.log(`[ZcashProvider] buildAndSignTransaction: sanitizedParams.amount=${sanitizedParams.amount}, type=${typeof sanitizedParams.amount}`);
 
     let signedTx: SignedTransaction;
 
@@ -737,6 +759,9 @@ export class ZcashProvider {
     params: TransactionParams,
     keys: ZcashKeys
   ): Promise<SignedTransaction> {
+    // Log to diagnose unit mismatch issue
+    console.log(`[ZcashProvider] buildTransparentTransaction: params.amount=${params.amount}, type=${typeof params.amount}, fee=${params.fee}`);
+
     // Use transaction builder's UTXO selection
     const inputs = await this.txBuilder.selectUTXOs(
       params.from.address,
@@ -778,6 +803,9 @@ export class ZcashProvider {
     params: TransactionParams,
     keys: ZcashKeys
   ): Promise<SignedTransaction> {
+    // Log to diagnose unit mismatch issue
+    console.log(`[ZcashProvider] buildShieldingTransaction: params.amount=${params.amount}, type=${typeof params.amount}, fee=${params.fee}`);
+
     // Get UTXOs using transaction builder (with UTXO cache fallback)
     const transparentInputs = await this.txBuilder.selectUTXOs(
       params.from.address,
@@ -1072,37 +1100,98 @@ export class ZcashProvider {
       };
     }
 
-    // Check if using Tatum (rate limited to 3 calls)
-    const isTatum = this.config.rpcEndpoint?.includes('tatum');
-    
-    // For Tatum: Still allow shielded sync (it's needed to see balance)
-    // Only skip for transparent addresses to avoid rate limits
-    if (isTatum && type === 'transparent') {
-      const balance = await this.getBalance(finalAddress, type);
-      return {
-        address: finalAddress,
-        newTransactions: 0,
-        updatedBalance: balance,
-        lastSynced: Date.now(),
-        blockHeight: 0 // Don't call getBlockCount for Tatum
-      };
-    }
-
-    // For shielded addresses or local node: Full sync
+    // Full sync for all address types
     const blockCount = await this.rpcClient.getBlockCount();
 
     if (type === 'transparent') {
       // Sync transparent address - try to get UTXOs
       let utxos: any[] = [];
+      
+      // First, ensure address is imported into wallet (required for local zcashd nodes)
+      // zcashd requires addresses to be imported before listunspent can find UTXOs
+      try {
+        await this.rpcClient.importAddress(finalAddress, '', false, true);
+        console.log(`[ZcashProvider] Imported address ${finalAddress.substring(0, 20)}... into wallet`);
+        
+        // Wait a moment for the import to be processed by zcashd
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (importError: any) {
+        const importErrorMsg = importError?.message || String(importError || '');
+        // If import fails due to method not found, continue anyway (some RPC endpoints don't support it)
+        if (importErrorMsg.includes('Method not found') || importErrorMsg.includes('not found')) {
+          console.warn(`[ZcashProvider] importaddress method not available - continuing without import`);
+        } else if (importErrorMsg.includes('already') || importErrorMsg.includes('duplicate') || importErrorMsg.includes('already have')) {
+          console.log(`[ZcashProvider] Address ${finalAddress.substring(0, 20)}... already imported`);
+        } else {
+          console.warn(`[ZcashProvider] Failed to import address: ${importErrorMsg}`);
+          // Continue anyway - we'll try listunspent and see what happens
+        }
+      }
+      
+      // Now try to get UTXOs
       try {
         utxos = await this.rpcClient.listUnspent(1, 9999999, [finalAddress]);
-        this.utxoCache.updateUTXOs(finalAddress, utxos, blockCount);
+        if (utxos.length > 0) {
+          // Verify amounts are in zatoshi (listUnspent should convert them)
+          const totalAmount = utxos.reduce((sum, u) => sum + u.amount, 0);
+          console.log(`[ZcashProvider] Found ${utxos.length} UTXO(s) for ${finalAddress.substring(0, 20)}..., total: ${totalAmount} zatoshi (${(totalAmount / 100000000).toFixed(8)} ZEC)`);
+          
+          // Ensure all amounts are in zatoshi (convert if needed)
+          const convertedUtxos = utxos.map(utxo => {
+            if (utxo.amount > 0 && utxo.amount < 1) {
+              console.warn(`[ZcashProvider] UTXO amount in ZEC format (${utxo.amount}), converting to zatoshi`);
+              return {
+                ...utxo,
+                amount: Math.round(utxo.amount * 100000000)
+              };
+            }
+            return utxo;
+          });
+          
+          this.utxoCache.updateUTXOs(finalAddress, convertedUtxos, blockCount);
+          console.log(`[ZcashProvider] Updated UTXO cache with ${convertedUtxos.length} UTXO(s)`);
+        } else {
+          // Check if address has a balance (might need rescan)
+          const balance = await this.getBalance(finalAddress, 'transparent');
+          if (balance.total > 0 && utxos.length === 0) {
+            // Address has balance but no UTXOs - try rescan
+            console.log(`[ZcashProvider] Address has balance (${balance.total} zatoshi) but no UTXOs found. Attempting rescan...`);
+            try {
+              await this.rpcClient.importAddress(finalAddress, '', true, true);
+              // Wait a moment for rescan to process recent blocks
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              // Try listunspent again after rescan
+              utxos = await this.rpcClient.listUnspent(1, 9999999, [finalAddress]);
+              if (utxos.length > 0) {
+                // Ensure amounts are in zatoshi
+                const convertedUtxos = utxos.map(utxo => {
+                  if (utxo.amount > 0 && utxo.amount < 1) {
+                    return {
+                      ...utxo,
+                      amount: Math.round(utxo.amount * 100000000)
+                    };
+                  }
+                  return utxo;
+                });
+                
+                this.utxoCache.updateUTXOs(finalAddress, convertedUtxos, blockCount);
+                const totalAmount = convertedUtxos.reduce((sum, u) => sum + u.amount, 0);
+                console.log(`[ZcashProvider] Found ${convertedUtxos.length} UTXO(s) after rescan for ${finalAddress.substring(0, 20)}..., total: ${totalAmount} zatoshi`);
+              } else {
+                console.log(`[ZcashProvider] No UTXOs found after rescan. Balance: ${balance.total} zatoshi`);
+              }
+            } catch (rescanError: any) {
+              // Rescan failed - that's okay, continue without it
+              console.warn(`[ZcashProvider] Rescan failed: ${rescanError?.message || String(rescanError)}`);
+            }
+          } else {
+            console.log(`[ZcashProvider] No UTXOs found for ${finalAddress.substring(0, 20)}... (balance: ${balance.total} zatoshi)`);
+          }
+        }
       } catch (utxoError: any) {
         const errorMsg = utxoError?.message || String(utxoError || '');
         if (errorMsg.includes('not found') || errorMsg.includes('Method not found') || errorMsg.includes('listunspent') || errorMsg.includes('reindexing')) {
           // RPC doesn't support listunspent or node is reindexing
-          // Try fallback: fetch from block explorer API (if available)
-          // For now, we can't populate UTXO cache, but we can still get balance
           console.warn(`[ZcashProvider] listunspent not available (${errorMsg.includes('reindexing') ? 'node reindexing' : 'method not supported'}) - cannot populate UTXO cache for ${finalAddress}`);
           
           // If node is reindexing, this is expected - don't throw error
@@ -1411,23 +1500,50 @@ export class ZcashProvider {
   private async getViewingKeyForAddress(address: string): Promise<Uint8Array | null> {
     // Check cache first
     if (this.viewingKeyCache.has(address)) {
+      console.log(`[ZcashProvider] getViewingKeyForAddress: Found in cache for ${address.substring(0, 20)}...`);
       return this.viewingKeyCache.get(address)!;
     }
+    
+    console.log(`[ZcashProvider] getViewingKeyForAddress: Not in cache for ${address.substring(0, 20)}...`);
     
     // Try to find midenAccountId from reverse mapping
     const midenAccountId = this.addressToAccountId.get(address);
     if (!midenAccountId) {
       // Address not in our cache - can't derive viewing key without account ID
+      console.warn(`[ZcashProvider] getViewingKeyForAddress: Address ${address.substring(0, 20)}... not found in addressToAccountId mapping`);
       return null;
     }
+    
+    console.log(`[ZcashProvider] getViewingKeyForAddress: Found midenAccountId ${midenAccountId.substring(0, 20)}... but viewing key not cached`);
     
     // If we have the address but not the viewing key, we need to re-derive
     // But we can't derive without the private key, which requires user permission
     // Return null and let the caller handle it (they should call getAddresses first)
-    console.warn(`[ZcashProvider] Viewing key not cached for ${address}. Call getAddresses() first to populate cache.`);
+    console.warn(`[ZcashProvider] Viewing key not cached for ${address.substring(0, 20)}... Call getAddresses() first to populate cache.`);
     return null;
   }
 
+
+  /**
+   * Cache viewing key for an address
+   * 
+   * This is a public method to allow caching viewing keys from account objects
+   * without requiring private key export.
+   * 
+   * @param address - Shielded address (z-address)
+   * @param viewingKey - Incoming viewing key (ivk) to cache
+   * @param midenAccountId - Miden account ID for reverse mapping
+   */
+  cacheViewingKey(address: string, viewingKey: Uint8Array, midenAccountId: string): void {
+    if (!address || !viewingKey || viewingKey.length === 0) {
+      console.warn('[ZcashProvider] cacheViewingKey: Invalid parameters');
+      return;
+    }
+    
+    this.viewingKeyCache.set(address, viewingKey);
+    this.addressToAccountId.set(address, midenAccountId);
+    console.log(`[ZcashProvider] cacheViewingKey: Cached viewing key for ${address.substring(0, 20)}...`);
+  }
 
   /**
    * Shutdown and cleanup
