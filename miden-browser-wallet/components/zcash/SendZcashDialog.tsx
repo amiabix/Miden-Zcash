@@ -317,8 +317,14 @@ export function SendZcashDialog({
           `3. For mainnet: Use a full node RPC endpoint\n\n` +
           `Note: Tatum API has limited RPC support and cannot build transparent transactions.`;
       } else if (errorMsg.includes('No UTXOs') || errorMsg.includes('UTXO')) {
-        errorMsg = `No UTXOs available.\n\n` +
-          `Please click "Sync Transparent Address" first, or use a full Zcash node.`;
+        errorMsg = `❌ No UTXOs Available\n\n` +
+          `Your transparent address hasn't been synced yet.\n\n` +
+          `To send transparent transactions:\n` +
+          `1. Close this dialog\n` +
+          `2. Click the "Sync Transparent Address" button\n` +
+          `3. Wait for the sync to complete\n` +
+          `4. Then try sending again\n\n` +
+          `Note: UTXO sync caches spendable outputs from the blockchain. This must be done before sending transparent transactions.`;
       } else if (errorMsg.includes('No shielded notes found') || errorMsg.includes('hasn\'t scanned')) {
         errorMsg = `❌ No Shielded Notes Found\n\n` +
           `Your shielded address hasn't been synced yet.\n\n` +
