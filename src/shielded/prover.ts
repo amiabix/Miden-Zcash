@@ -276,9 +276,21 @@ export class ZcashProver {
     _nullifier: Uint8Array,
     _rk: Uint8Array
   ): Promise<boolean> {
-    // Placeholder verification
-    // Real implementation would use the Groth16 verifier
-    return proof.proof.length === 192;
+    // CRITICAL: Do not accept proofs without proper verification
+    // Basic format check only - real verification requires Groth16 verifier
+    if (!proof.proof || proof.proof.length !== 192) {
+      return false;
+    }
+    
+    // Check that proof is not all zeros (common placeholder)
+    const isAllZeros = proof.proof.every(b => b === 0);
+    if (isAllZeros) {
+      return false;
+    }
+    
+    // Without a real verifier, we cannot validate the proof
+    // Return false to indicate proof cannot be verified
+    throw new Error('Proof verification requires Groth16 verifier. Cannot verify proof without zkeys or WASM prover.');
   }
 
   /**
@@ -290,8 +302,21 @@ export class ZcashProver {
     _cmu: Uint8Array,
     _ephemeralKey: Uint8Array
   ): Promise<boolean> {
-    // Placeholder verification
-    return proof.proof.length === 192;
+    // CRITICAL: Do not accept proofs without proper verification
+    // Basic format check only - real verification requires Groth16 verifier
+    if (!proof.proof || proof.proof.length !== 192) {
+      return false;
+    }
+    
+    // Check that proof is not all zeros (common placeholder)
+    const isAllZeros = proof.proof.every(b => b === 0);
+    if (isAllZeros) {
+      return false;
+    }
+    
+    // Without a real verifier, we cannot validate the proof
+    // Return false to indicate proof cannot be verified
+    throw new Error('Proof verification requires Groth16 verifier. Cannot verify proof without zkeys or WASM prover.');
   }
 
   /**

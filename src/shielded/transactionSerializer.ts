@@ -12,6 +12,7 @@ import type { ShieldedBundle, ShieldedSpendDescription, ShieldedOutputDescriptio
 import type { TransparentInput, TransparentOutput } from '../types/index';
 import { concatBytes } from '../utils/bytes';
 import { bytesToHex } from '../utils/bytes';
+import { blake2b } from '@noble/hashes/blake2b';
 
 /**
  * Serialization format for shielded transactions
@@ -326,12 +327,16 @@ export class TransactionSerializer {
 
   /**
    * Hash a list of byte arrays and return single hash
-   * Placeholder: uses concatenation hash
+   * Uses Blake2b-256 as per Zcash specification
    */
-  private static hashList(_items: Uint8Array[]): Uint8Array {
-    // In production, this would use Blake2b-256
-    // For now, return concatenated hash (placeholder)
-    return this.getZeroHash(32);
+  private static hashList(items: Uint8Array[]): Uint8Array {
+    const concatenated = new Uint8Array(items.reduce((sum, item) => sum + item.length, 0));
+    let offset = 0;
+    for (const item of items) {
+      concatenated.set(item, offset);
+      offset += item.length;
+    }
+    return blake2b(concatenated, { dkLen: 32 });
   }
 
   /**

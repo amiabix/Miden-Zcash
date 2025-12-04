@@ -294,23 +294,44 @@ export class ZcashProvider {
     
     if (isTransparent) {
       // Check cache first (5 minute TTL)
+      // Only use cache if balance > 0 OR if cache is very recent (< 30 seconds)
+      // This ensures we always fetch fresh data when balance is 0
       const cached = this.balanceCache.get(finalAddress);
       const cacheTTL = 300000; // 5 minutes
+      const shortCacheTTL = 30000; // 30 seconds for zero balances
       
-      if (cached && Date.now() - cached.timestamp < cacheTTL && cached.balance.total > 0) {
-        return cached.balance;
+      if (cached && Date.now() - cached.timestamp < cacheTTL) {
+        // Use cache if balance > 0, or if cache is very recent (even for zero)
+        if (cached.balance.total > 0 || Date.now() - cached.timestamp < shortCacheTTL) {
+          return cached.balance;
+        }
       }
       
-      // Fetch from CipherScan API (network-aware)
+      // Fetch from CipherScan API via proxy (to avoid CORS issues)
       try {
-        const cipherscanBaseUrl = this.network === 'testnet' 
-          ? 'https://testnet.cipherscan.app' 
-          : 'https://cipherscan.app';
-        const cipherscanUrl = `${cipherscanBaseUrl}/api/address/${finalAddress}`;
-        const response = await fetch(cipherscanUrl);
+        // Use Next.js API proxy route to avoid CORS
+        // Check if we're in browser environment and can use relative URL
+        const isBrowser = typeof window !== 'undefined';
+        const proxyUrl = isBrowser 
+          ? `/api/zcash/balance?address=${encodeURIComponent(finalAddress)}&network=${this.network}`
+          : `${this.network === 'testnet' ? 'https://testnet.cipherscan.app' : 'https://cipherscan.app'}/api/address/${finalAddress}`;
+        
+        // Add timeout to prevent hanging
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        
+        const response = await fetch(proxyUrl, {
+          method: isBrowser ? 'GET' : 'GET',
+          headers: {
+            'Accept': 'application/json',
+          },
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
         
         if (!response.ok) {
-          throw new Error(`CipherScan API returned ${response.status}: ${response.statusText}`);
+          throw new Error(`Balance API returned ${response.status}: ${response.statusText}`);
         }
         
         const data = await response.json();
@@ -343,16 +364,32 @@ export class ZcashProvider {
         this.balanceCache.set(finalAddress, { balance, timestamp: Date.now() });
         return balance;
       } catch (cipherscanError: any) {
+        // Check if it's a timeout or abort
+        const isTimeout = cipherscanError?.name === 'AbortError' || 
+                         cipherscanError?.message?.includes('timeout') ||
+                         cipherscanError?.message?.includes('aborted');
+        
         // CipherScan API failed - using cached balance if available
         if (cached) {
-          // Return cached balance but throw error to notify user
-          throw new Error(
-            `Failed to fetch balance from CipherScan API: ${cipherscanError?.message || 'Unknown error'}. ` +
-            `Showing cached balance (may be outdated). Please try again later.`
-          );
+          // Return cached balance (even if zero) to prevent infinite loading
+          return cached.balance;
         }
         
-        // Throw error instead of silently returning 0
+        // If timeout, return zero balance instead of throwing
+        if (isTimeout) {
+          console.warn('CipherScan API timeout, returning zero balance');
+          const zeroBalance: Balance = {
+            confirmed: 0,
+            unconfirmed: 0,
+            total: 0,
+            pending: 0,
+            unit: 'zatoshi'
+          };
+          this.balanceCache.set(finalAddress, { balance: zeroBalance, timestamp: Date.now() });
+          return zeroBalance;
+        }
+        
+        // Throw error for other issues
         throw new Error(
           `Failed to fetch balance from CipherScan API: ${cipherscanError?.message || 'Unknown error'}. ` +
           `Please check your internet connection and try again.`
@@ -977,8 +1014,9 @@ export class ZcashProvider {
     // Check if using Tatum (rate limited to 3 calls)
     const isTatum = this.config.rpcEndpoint?.includes('tatum');
     
-    // For Tatum: Use cached balance, don't make multiple RPC calls
-    if (isTatum) {
+    // For Tatum: Still allow shielded sync (it's needed to see balance)
+    // Only skip for transparent addresses to avoid rate limits
+    if (isTatum && type === 'transparent') {
       const balance = await this.getBalance(finalAddress, type);
       return {
         address: finalAddress,
@@ -989,7 +1027,7 @@ export class ZcashProvider {
       };
     }
 
-    // For local node: Full sync
+    // For shielded addresses or local node: Full sync
     const blockCount = await this.rpcClient.getBlockCount();
 
     if (type === 'transparent') {

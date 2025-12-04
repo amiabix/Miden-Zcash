@@ -146,10 +146,15 @@ export function ZcashAccountView() {
         </button>
       </div>
 
-      {showSendDialog && (
+      {showSendDialog && account && (
         <SendZcashDialog
+          open={showSendDialog}
           onClose={() => setShowSendDialog(false)}
-          fromAddress={addresses.tAddress || ''}
+          tAddress={addresses.tAddress || undefined}
+          zAddress={addresses.zAddress || undefined}
+          transparentBalance={transparent?.total || 0}
+          shieldedBalance={shielded?.total || 0}
+          midenAccountId={account.midenAccountId}
         />
       )}
     </div>

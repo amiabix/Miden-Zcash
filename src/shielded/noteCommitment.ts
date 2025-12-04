@@ -4,8 +4,10 @@
  */
 
 import { blake2s } from '@noble/hashes/blake2s';
+import { blake2b } from '@noble/hashes/blake2b';
 import { concatBytes } from '../utils/bytes';
 import { computePedersenNoteCommitment, computePedersenValueCommitment } from './pedersenHash.js';
+import { NULLIFIER_KEY_GENERATOR_COORDS, JubjubPoint, FieldElement, bytesToBigIntLE } from './jubjubHelper.js';
 import type {
   SaplingPaymentAddress,
   NotePlaintext
@@ -106,16 +108,27 @@ export function computeNullifier(
  * 
  * nk = [nsk] * generator_nk
  * 
- * This is a placeholder - real implementation uses Jubjub scalar multiplication
+ * Uses proper Jubjub scalar multiplication
  */
 export function deriveNullifierKey(nsk: Uint8Array): Uint8Array {
   if (nsk.length !== 32) {
     throw new Error('nsk must be 32 bytes');
   }
 
-  // Placeholder: hash the nsk to get nk
-  // Real implementation: nk = [nsk] * generator_nk on Jubjub
-  return blake2s(nsk, { dkLen: 32 });
+  // Convert nsk to scalar (little-endian)
+  const nskScalar = bytesToBigIntLE(nsk);
+  
+  // Create generator point
+  const generator = new JubjubPoint(
+    new FieldElement(NULLIFIER_KEY_GENERATOR_COORDS.x),
+    new FieldElement(NULLIFIER_KEY_GENERATOR_COORDS.y)
+  );
+  
+  // Compute nk = [nsk] * generator_nk
+  const nkPoint = generator.scalarMult(nskScalar);
+  
+  // Return compressed point bytes (32 bytes)
+  return nkPoint.toBytes();
 }
 
 /**

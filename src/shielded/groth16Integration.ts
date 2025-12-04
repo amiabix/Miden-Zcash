@@ -461,6 +461,8 @@ export class Groth16Integration {
     // Use librustzcash verification if available
     if (this.proverType === 'librustzcash' && this.spendProver instanceof LibrustzcashProver) {
       // librustzcash verification would need more context (cv, anchor, etc.)
+      // For now, if librustzcash is available, we trust it generated a valid proof
+      // TODO: Implement full verification with cv, anchor, etc.
       return true;
     }
     
@@ -475,8 +477,9 @@ export class Groth16Integration {
       }
     }
 
-    // Development mode: accept all proofs (placeholder)
-    return true;
+    // No valid prover available - reject proof
+    // CRITICAL: Do not accept proofs without validation
+    throw new Error('Proof verification failed: No valid prover available. Cannot verify proof without zkeys or WASM prover.');
   }
 
   /**

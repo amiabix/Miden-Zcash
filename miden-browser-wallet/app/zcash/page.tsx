@@ -74,7 +74,7 @@ export default function ZcashPage() {
   };
 
   const handleLoadBalance = async () => {
-    if (!addresses.tAddress) {
+    if (!addresses.tAddress && !addresses.zAddress) {
       toast.error('Please load addresses first');
       return;
     }
@@ -89,6 +89,37 @@ export default function ZcashPage() {
         toast.error('Rate limit exceeded. Please wait before trying again.');
       } else {
         toast.error(errorMsg);
+      }
+    }
+  };
+
+  const handleSyncShielded = async () => {
+    if (!addresses.zAddress) {
+      toast.error('No shielded address available. Please load addresses first.');
+      return;
+    }
+
+    if (!module) {
+      toast.error('Zcash module not initialized');
+      return;
+    }
+
+    try {
+      toast.info('Syncing shielded address... This may take a moment.');
+      const provider = module.getProvider();
+      const result = await provider.syncAddress(addresses.zAddress, 'shielded');
+      toast.success(`Sync complete! Found ${result.newTransactions} new notes.`);
+      await refreshBalance();
+    } catch (err: any) {
+      const errorMsg = err?.message || 'Failed to sync shielded address';
+      console.error('Shielded sync error:', err);
+      
+      if (errorMsg.includes('429') || errorMsg.includes('Rate limit')) {
+        toast.error('Rate limit exceeded. Please wait before trying again.');
+      } else if (errorMsg.includes('Viewing key')) {
+        toast.error('Viewing key not found. Please reload addresses first.');
+      } else {
+        toast.error(`Sync failed: ${errorMsg}`);
       }
     }
   };
@@ -220,7 +251,12 @@ export default function ZcashPage() {
             <CardTitle>Balance</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {transparentBalance ? (
+            {balanceLoading ? (
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">Loading balance...</p>
+                <p className="text-xs text-muted-foreground">This may take a few seconds</p>
+              </div>
+            ) : transparentBalance ? (
               <div className="space-y-2">
                 <div>
                   <p className="text-sm text-muted-foreground">Transparent Balance</p>
@@ -266,10 +302,19 @@ export default function ZcashPage() {
             <div className="flex gap-2">
               <Button 
                 onClick={handleLoadBalance} 
-                disabled={balanceLoading || !addresses.tAddress}
+                disabled={balanceLoading || (!addresses.tAddress && !addresses.zAddress)}
               >
                 {balanceLoading ? 'Loading...' : 'Refresh Balance'}
               </Button>
+              {addresses.zAddress && (
+                <Button 
+                  onClick={handleSyncShielded} 
+                  disabled={balanceLoading}
+                  variant="outline"
+                >
+                  Sync Shielded Address
+                </Button>
+              )}
             </div>
             {addresses.tAddress && (
               <a 
@@ -286,7 +331,7 @@ export default function ZcashPage() {
       </div>
 
       {/* Send Transaction Dialog */}
-      {addresses.tAddress && account && (
+      {account && (
         <SendZcashDialog
           open={showSendDialog}
           onClose={() => {
@@ -294,7 +339,10 @@ export default function ZcashPage() {
             // Refresh balance after sending
             setTimeout(() => refreshBalance(), 2000);
           }}
-          fromAddress={addresses.tAddress}
+          tAddress={addresses.tAddress || undefined}
+          zAddress={addresses.zAddress || undefined}
+          transparentBalance={transparentBalance?.total || 0}
+          shieldedBalance={shieldedBalance?.total || 0}
           midenAccountId={account.midenAccountId}
         />
       )}

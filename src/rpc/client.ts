@@ -442,10 +442,25 @@ export class ZcashRPCClient {
         errorMessage.includes('getreceivedbyaddress') ||
         errorMessage.includes('not found');
       
-      // For Tatum: Don't try fallback - just return 0 (they don't support balance queries)
+      // For Tatum: Try fallback with listunspent
       if (isTatum && isMethodNotFound) {
-        // Tatum free tier: getreceivedbyaddress not available, returning 0
-        return 0;
+        try {
+          // Fallback: calculate from UTXOs (Tatum supports listunspent)
+          const utxos = await this.listUnspent(minconf, 9999999, [address]);
+          return utxos.reduce((sum, utxo) => sum + utxo.amount, 0);
+        } catch (utxoError: any) {
+          // If listunspent also fails, return 0
+          const utxoErrorMessage = utxoError?.message || String(utxoError || '');
+          const utxoErrorCode = utxoError?.code || (utxoError as any)?.code;
+          
+          // If rate limited, throw to trigger backoff
+          if (utxoErrorCode === 429 || utxoErrorMessage.includes('429') || utxoErrorMessage.includes('Rate limit')) {
+            throw utxoError;
+          }
+          
+          // Otherwise return 0 for Tatum
+          return 0;
+        }
       }
       
       // For local node: Try fallback

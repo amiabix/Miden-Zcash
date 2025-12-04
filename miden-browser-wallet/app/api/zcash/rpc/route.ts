@@ -10,10 +10,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Server-side only environment variables (no NEXT_PUBLIC_ prefix)
-const RPC_ENDPOINT = process.env.ZCASH_RPC_ENDPOINT;
-const RPC_API_KEY = process.env.ZCASH_RPC_API_KEY;
-const RPC_USER = process.env.ZCASH_RPC_USER;
-const RPC_PASSWORD = process.env.ZCASH_RPC_PASSWORD;
+const RPC_ENDPOINT = process.env.ZCASH_RPC_ENDPOINT || 'https://zcash-testnet.gateway.tatum.io/';
+const RPC_API_KEY = process.env.ZCASH_RPC_API_KEY || 't-692a372e3711cb06c8c50157-8ac3e5ed66a64742be4cc691';
+const RPC_USER = process.env.ZCASH_RPC_USER || 'zcashrpc';
+const RPC_PASSWORD = process.env.ZCASH_RPC_PASSWORD || '47da7583f01a8510f2edcdd062238fbeb8001e330e140754d711313032ffae17';
 
 /**
  * POST /api/zcash/rpc
@@ -34,10 +34,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Get RPC endpoint (use configured or default)
-    const endpoint = RPC_ENDPOINT || 'http://localhost:18232';
+    const endpoint = RPC_ENDPOINT;
     
     // Determine JSON-RPC version based on endpoint
     const isNOWNodes = endpoint.includes('nownodes.io');
+    const isTatum = endpoint.includes('tatum.io');
     const jsonrpc = isNOWNodes ? '1.0' : '2.0';
     const requestId = isNOWNodes ? `req_${Date.now()}_${Math.random()}` : id || Date.now();
 
@@ -47,13 +48,13 @@ export async function POST(request: NextRequest) {
       'Accept': 'application/json'
     };
 
-    // Add authentication
-    if (RPC_USER && RPC_PASSWORD) {
+    // Add authentication (only for non-Tatum endpoints)
+    if (!isTatum && RPC_USER && RPC_PASSWORD) {
       const auth = Buffer.from(`${RPC_USER}:${RPC_PASSWORD}`).toString('base64');
       headers['Authorization'] = `Basic ${auth}`;
     }
 
-    // Add API key header (NOWNodes uses 'api-key', others use 'x-api-key')
+    // Add API key header (NOWNodes uses 'api-key', Tatum and others use 'x-api-key')
     if (RPC_API_KEY) {
       headers[isNOWNodes ? 'api-key' : 'x-api-key'] = RPC_API_KEY;
     }
@@ -65,6 +66,16 @@ export async function POST(request: NextRequest) {
       params,
       id: requestId
     };
+
+    // Debug: Log request for Tatum endpoints
+    if (isTatum) {
+      console.log('[RPC Proxy] Tatum request:', {
+        endpoint,
+        method,
+        hasApiKey: !!RPC_API_KEY,
+        requestBody: JSON.stringify(rpcRequest)
+      });
+    }
 
     // Make request to Zcash node
     const response = await fetch(endpoint, {

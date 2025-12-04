@@ -19,19 +19,39 @@ let isAddressForNetworkSDK: any = null;
 interface SendZcashDialogProps {
   open: boolean;
   onClose: () => void;
-  fromAddress: string;
+  fromAddress?: string;
+  fromAddressType?: 'transparent' | 'shielded';
+  tAddress?: string;
+  zAddress?: string;
+  transparentBalance?: number;
+  shieldedBalance?: number;
   midenAccountId?: string;
 }
 
-export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: SendZcashDialogProps) {
+export function SendZcashDialog({ 
+  open, 
+  onClose, 
+  fromAddress,
+  fromAddressType,
+  tAddress,
+  zAddress,
+  transparentBalance = 0,
+  shieldedBalance = 0,
+  midenAccountId 
+}: SendZcashDialogProps) {
   const [zcashModule, setZcashModule] = useState<any>(null);
   const [toAddress, setToAddress] = useState('');
   const [amount, setAmount] = useState('');
   const [memo, setMemo] = useState('');
-  const [addressType, setAddressType] = useState<'transparent' | 'shielded'>('transparent');
+  const [fromType, setFromType] = useState<'transparent' | 'shielded'>(
+    fromAddressType || (fromAddress?.startsWith('t') || fromAddress?.startsWith('tm') ? 'transparent' : 'shielded') || 'transparent'
+  );
+  const [toType, setToType] = useState<'transparent' | 'shielded'>('transparent');
+  const [fee, setFee] = useState('0.0001');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [validating, setValidating] = useState(false);
 
   useEffect(() => {
     const loadModule = async () => {
@@ -54,8 +74,17 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
     };
     if (open) {
       loadModule();
+      // Reset form when dialog opens
+      setToAddress('');
+      setAmount('');
+      setMemo('');
+      setError(null);
+      setTxHash(null);
+      setFromType(fromAddressType || (fromAddress?.startsWith('t') || fromAddress?.startsWith('tm') ? 'transparent' : 'shielded') || 'transparent');
+      setToType('transparent');
+      setFee('0.0001');
     }
-  }, [open]);
+  }, [open, fromAddress, fromAddressType]);
 
   const validateAddress = (address: string): { valid: boolean; error?: string } => {
     // Input sanitization: trim whitespace
@@ -91,14 +120,14 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
         }
         
         // Type validation: check if address type matches selected type
-        if (result.type !== addressType && result.type !== 'orchard') {
+        if (result.type !== toType && result.type !== 'orchard') {
           // Allow orchard addresses for shielded type
-          if (addressType === 'shielded' && result.type === 'orchard') {
+          if (toType === 'shielded' && result.type === 'orchard') {
             return { valid: true };
           }
           return { 
             valid: false, 
-            error: `Address is ${result.type} but ${addressType} was selected` 
+            error: `Address is ${result.type} but ${toType} was selected` 
           };
         }
         
@@ -110,7 +139,7 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
     }
     
     // Fallback: prefix-only validation (less secure, but better than nothing)
-    if (addressType === 'transparent') {
+    if (toType === 'transparent') {
       if (!sanitized.startsWith('t') && !sanitized.startsWith('tm')) {
         return { valid: false, error: 'Invalid transparent address format' };
       }
@@ -133,11 +162,31 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
       return;
     }
 
+    // Determine actual from address based on selected type
+    const actualFromAddress = fromType === 'transparent' 
+      ? (tAddress || fromAddress || '')
+      : (zAddress || fromAddress || '');
+    
+    if (!actualFromAddress) {
+      toast.error(`No ${fromType} address available`);
+      setSending(false);
+      return;
+    }
+
+    // Check balance
+    const availableBalance = fromType === 'transparent' ? transparentBalance : shieldedBalance;
+    if (availableBalance <= 0) {
+      toast.error(`Insufficient ${fromType} balance`);
+      setSending(false);
+      return;
+    }
+
     // Sanitize and validate address
     const sanitizedAddress = toAddress.trim();
     const validation = validateAddress(sanitizedAddress);
     if (!validation.valid) {
-      toast.error(validation.error || `Invalid ${addressType} address format`);
+      toast.error(validation.error || `Invalid ${toType} address format`);
+      setSending(false);
       return;
     }
     
@@ -178,7 +227,7 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
       const amountZatoshi = BigInt(zatoshiString);
       
       // Validate minimum amount: 1 zatoshi = 0.00000001 ZEC
-      if (amountZatoshi <= 0n) {
+      if (amountZatoshi <= BigInt(0)) {
         toast.error('Amount too small. Minimum is 1 zatoshi (0.00000001 ZEC)');
         setSending(false);
         return;
@@ -187,15 +236,36 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
       // Convert BigInt to number for transaction (zatoshi fits in safe integer range)
       const amountZatoshiNumber = Number(amountZatoshi);
 
-      // Determine transaction type
-      const fromType = fromAddress.startsWith('t') || fromAddress.startsWith('tm') ? 'transparent' : 'shielded';
-      const toType = addressType;
+      // Convert fee to zatoshi
+      const feeStr = fee.trim();
+      let feeZatoshi = 10000; // Default: 0.0001 ZEC
+      if (feeStr && /^\d+(\.\d{1,8})?$/.test(feeStr)) {
+        const feeParts = feeStr.split('.');
+        const feeInteger = feeParts[0] || '0';
+        let feeFractional = feeParts[1] || '';
+        while (feeFractional.length < 8) {
+          feeFractional += '0';
+        }
+        if (feeFractional.length > 8) {
+          feeFractional = feeFractional.substring(0, 8);
+        }
+        feeZatoshi = Number(BigInt(feeInteger + feeFractional));
+      }
+
+      // Check if amount + fee exceeds balance
+      const totalRequired = amountZatoshiNumber + feeZatoshi;
+      if (totalRequired > availableBalance) {
+        toast.error(`Insufficient balance. Required: ${(totalRequired / 100000000).toFixed(8)} ZEC (amount + fee), Available: ${(availableBalance / 100000000).toFixed(8)} ZEC`);
+        setSending(false);
+        return;
+      }
 
       console.log('[SendZcashDialog] Sending transaction:', {
-        from: fromAddress,
-        to: toAddress,
+        from: actualFromAddress,
+        to: finalAddress,
         amount: amountZatoshiNumber,
         amountZatoshi: amountZatoshi.toString(),
+        fee: feeZatoshi,
         fromType,
         toType
       });
@@ -203,7 +273,7 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
       // Build and sign transaction (use sanitized address)
       const signedTx = await zcashModule.buildAndSignTransaction(midenAccountId, {
         from: {
-          address: fromAddress.trim(),
+          address: actualFromAddress.trim(),
           type: fromType
         },
         to: {
@@ -212,7 +282,7 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
         },
         amount: amountZatoshiNumber,
         memo: memo || undefined,
-        fee: 10000 // Default fee in zatoshi
+        fee: feeZatoshi
       });
 
       console.log('[SendZcashDialog] Transaction signed, broadcasting...');
@@ -255,20 +325,57 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label>From Address</Label>
-            <Input
-              type="text"
-              value={fromAddress}
-              disabled
-              className="font-mono text-sm"
-            />
+            <Label>From Address Type</Label>
+            <select
+              value={fromType}
+              onChange={(e) => {
+                const newFromType = e.target.value as 'transparent' | 'shielded';
+                setFromType(newFromType);
+                // Check if address is available
+                const addr = newFromType === 'transparent' ? tAddress : zAddress;
+                if (!addr) {
+                  toast.error(`No ${newFromType} address available`);
+                }
+              }}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!tAddress && !zAddress}
+            >
+              <option value="transparent" disabled={!tAddress}>
+                Transparent {tAddress ? `(${(transparentBalance / 100000000).toFixed(8)} ZEC)` : '(not available)'}
+              </option>
+              <option value="shielded" disabled={!zAddress}>
+                Shielded {zAddress ? `(${(shieldedBalance / 100000000).toFixed(8)} ZEC)` : '(not available)'}
+              </option>
+            </select>
+            {fromType === 'transparent' && tAddress && (
+              <Input
+                type="text"
+                value={tAddress}
+                disabled
+                className="font-mono text-sm"
+              />
+            )}
+            {fromType === 'shielded' && zAddress && (
+              <Input
+                type="text"
+                value={zAddress}
+                disabled
+                className="font-mono text-sm"
+              />
+            )}
+            {fromType === 'transparent' && !tAddress && (
+              <p className="text-xs text-red-500">No transparent address available</p>
+            )}
+            {fromType === 'shielded' && !zAddress && (
+              <p className="text-xs text-red-500">No shielded address available</p>
+            )}
           </div>
 
           <div className="space-y-2">
             <Label>To Address Type</Label>
             <select
-              value={addressType}
-              onChange={(e) => setAddressType(e.target.value as 'transparent' | 'shielded')}
+              value={toType}
+              onChange={(e) => setToType(e.target.value as 'transparent' | 'shielded')}
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="transparent">Transparent (t-address)</option>
@@ -293,14 +400,14 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
                   setToAddress(trimmed);
                 }
               }}
-              placeholder={addressType === 'transparent' ? 'tm...' : 'ztestsapling...'}
+              placeholder={toType === 'transparent' ? 'tm...' : 'ztestsapling...'}
               className="font-mono text-sm"
               required
             />
             {toAddress && (() => {
               const validation = validateAddress(toAddress);
               return !validation.valid && (
-                <p className="text-xs text-red-500">{validation.error || `Invalid ${addressType} address format`}</p>
+                <p className="text-xs text-red-500">{validation.error || `Invalid ${toType} address format`}</p>
               );
             })()}
           </div>
@@ -342,15 +449,46 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
           </div>
 
           <div className="space-y-2">
+            <Label>Fee (ZEC)</Label>
+            <Input
+              type="number"
+              value={fee}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val.includes('e') || val.includes('E')) {
+                  const num = parseFloat(val);
+                  if (!isNaN(num)) {
+                    setFee(num.toFixed(8));
+                  } else {
+                    setFee(val.replace(/[eE]/g, ''));
+                  }
+                } else {
+                  setFee(val);
+                }
+              }}
+              step="0.00000001"
+              min="0.0001"
+              placeholder="0.0001"
+              required
+            />
+            <p className="text-xs text-muted-foreground">
+              Default fee: 0.0001 ZEC (10,000 zatoshi). Higher fees may result in faster confirmation.
+            </p>
+          </div>
+
+          <div className="space-y-2">
             <Label>Memo (optional)</Label>
             <Textarea
               value={memo}
               onChange={(e) => setMemo(e.target.value)}
-              placeholder="Optional memo (max 512 characters)"
+              placeholder="Optional memo (max 512 characters, only for shielded transactions)"
               maxLength={512}
               rows={3}
+              disabled={toType === 'transparent'}
             />
-            <p className="text-xs text-muted-foreground">{memo.length}/512 characters</p>
+            <p className="text-xs text-muted-foreground">
+              {memo.length}/512 characters {toType === 'transparent' && '(memos only work for shielded transactions)'}
+            </p>
           </div>
 
           {error && (
@@ -391,7 +529,15 @@ export function SendZcashDialog({ open, onClose, fromAddress, midenAccountId }: 
             </Button>
             <Button
               type="submit"
-              disabled={sending || !toAddress || !amount || !validateAddress(toAddress).valid || !midenAccountId}
+              disabled={
+                sending || 
+                !toAddress || 
+                !amount || 
+                !validateAddress(toAddress).valid || 
+                !midenAccountId ||
+                (fromType === 'transparent' && !tAddress) ||
+                (fromType === 'shielded' && !zAddress)
+              }
             >
               {sending ? (
                 <>
