@@ -8,7 +8,6 @@ The Miden-Zcash integration follows a layered architecture, separating concerns 
 
 - **Core SDK** (`src/`): Implements Zcash protocol features in TypeScript, offering both high-level and low-level APIs.
 - **Browser Wallet** (`miden-browser-wallet/`): A Next.js application that integrates the Core SDK and provides the user-facing wallet interface.
-- **Proving Service** (`proving-service/`): An optional Rust HTTP service that generates Groth16 proofs server-side for Sapling shielded transactions where client devices fail to prove locally.
 
 Below is an architecture diagram illustrating their interaction and modular decomposition:
 
@@ -21,7 +20,7 @@ Below is an architecture diagram illustrating their interaction and modular deco
 - **rpc/**: Communicates with Zcash nodes with JSON-RPC, supporting various authentication schemes (Basic Auth, API keys).
 - **state/**: Manages blockchain state with UTXOCache (for transparent outputs, keyed by txid:vout) and NoteCache (for Sapling notes, witnesses, and spent nullifiers); persists to IndexedDB (browser) or filesystem (Node).
 - **transactions/**: Builds, signs, and serializes transparent transactions; uses largest-first UTXO selection; ECDSA signing; serialization for RPC broadcast.
-- **shielded/**: Implements Sapling privacy: Jubjub ops (`@noble/curves`), blockchain scanning/decryption using ivk, maintaining witnesses; shielded tx construction with proofs and signatures; Groth16 proof orchestration (lib, service, fallbacks).
+- **shielded/**: Implements Sapling privacy: Jubjub ops (`@noble/curves`), blockchain scanning/decryption using ivk, maintaining witnesses; shielded tx construction with signatures;
 - **wallet/**: Connects the SDK to the wallet UI/API; manages ZcashModule which is the developer API facade, and bridges key export/derivation from Miden.
 - **provider/**: The main operational orchestrator that wires up all modules, maintains caches, spawns builder/signer/scanner/provers, and optimizes RPC/state access.
 
@@ -29,8 +28,6 @@ Below is an architecture diagram illustrating their interaction and modular deco
 Upon initialization, the provider constructs and connects all modules, establishes RPC connection(s), and initiates state and balance caches for rapid wallet operation. Proving can automatically offload to the service or run in-browser as needed.
 
 ***
-
-This modular separation enables easy extension (e.g., new proof mechanisms), cache persistence across both browser and Node environments, and robust integration with external wallets and proving services.
 
 ## Installation
 
@@ -54,11 +51,6 @@ This modular separation enables easy extension (e.g., new proof mechanisms), cac
     - Set `NEXT_PUBLIC_ZCASH_RPC_ENDPOINT` to your local Zcash RPC endpoint URL (default: `http://localhost:18232` for testnet, `http://localhost:8232` for mainnet).
     - For a local zcashd node, set `NEXT_PUBLIC_ZCASH_RPC_USER` and `NEXT_PUBLIC_ZCASH_RPC_PASSWORD` as configured in `~/.zcash/zcash.conf`.
     - The wallet is designed to work with a local zcashd node. Ensure your zcashd node is running and accessible.
-
-- **Download Sapling parameter files (required for proof generation):**
-  - Create the directory `miden-browser-wallet/public/params/` if it does not exist.
-  - Download `sapling-spend.params` and `sapling-output.params` from the official Zcash downloads page.
-  - Place these files in `miden-browser-wallet/public/params/` (each file is ~50MB).
 
 - **Start the development server:**
   - In `miden-browser-wallet/`, run `pnpm dev`.
@@ -131,13 +123,11 @@ Transparent transactions are built by selecting UTXOs from the UTXO cache or via
 
 The UTXO selector uses a largest-first strategy, sorting available UTXOs by value in descending order and selecting the minimum set that covers the transaction amount plus fees. **Important:** All amounts are handled in zatoshi (1 ZEC = 100,000,000 zatoshi). The RPC client automatically converts amounts from ZEC (decimal) to zatoshi (integer) when receiving responses from zcashd. The transaction builder includes safeguards to detect and convert any amounts that appear to be in ZEC format.
 
-Change is calculated as the difference between total input value and the sum of output value and fees. The transaction builder constructs a transaction structure with inputs referencing selected UTXOs and outputs for the recipient and change. Each input is signed using ECDSA on secp256k1 with the corresponding private key. The signature covers the transaction hash and is included in the scriptSig. The transaction is serialized to hex format for RPC broadcasting.
-
-Shielded transactions are built by selecting notes from the note cache using a similar largest-first strategy. The note selector filters notes by address, excludes spent notes, and ensures notes have sufficient confirmations. Selected notes are used to build spend descriptions, each containing a nullifier, Merkle tree witness, and Groth16 proof.
+Change is calculated as the difference between total input value and the sum of output value and fees. The transaction builder constructs a transaction structure with inputs referencing selected UTXOs and outputs for the recipient and change. Each input is signed using ECDSA on secp256k1 with the corresponding private key. The signature covers the transaction hash and is included in the scriptSig. The transaction is serialized to hex format for RPC broadcasting..
 
 Nullifiers are computed from the spending key and note nullifier seed using a pseudo-random function. The nullifier prevents double-spending by revealing that a note has been spent without revealing which note. Merkle tree witnesses are generated on-demand from the cached tree state, proving that the note commitment exists in the tree.
 
-Output descriptions are built for the recipient and any change. Each output contains an encrypted note, computed commitment, and Groth16 proof. The note is encrypted using the recipient's diversified public key and a randomly generated ephemeral secret key. The commitment is computed using Pedersen hash on the Jubjub curve.
+Output descriptions are built for the recipient and any change. Each output contains an encrypted note, computed commitment. The note is encrypted using the recipient's diversified public key and a randomly generated ephemeral secret key. The commitment is computed using Pedersen hash on the Jubjub curve.
 
 The binding signature is computed from the value balance and all spend and output descriptions. It ensures that the total value of inputs equals the total value of outputs plus fees. The transaction is serialized to binary format according to ZIP-225 specification.
 
@@ -169,7 +159,7 @@ The builder constructs the transaction structure with inputs and outputs, then c
 
 For shielded transactions, the flow begins with `ZcashModule.sendShieldedTransaction()`. The provider first checks that notes exist in the cache by calling `NoteSelector.selectNotes()`. If no notes are found, an error is thrown instructing the user to sync the address first.
 
-Selected notes are passed to `ShieldedTransactionBuilder.buildShieldedTransaction()`, which constructs spend descriptions with nullifiers and Merkle tree witnesses. Output descriptions are built for the recipient and change, with encrypted notes and commitments. The builder then calls `Groth16Integration.generateProofs()` to generate proofs for all spends and outputs.
+Selected notes are passed to `ShieldedTransactionBuilder.buildShieldedTransaction()`, which constructs spend descriptions with nullifiers and Merkle tree witnesses. Output descriptions are built for the recipient and change, with encrypted notes and commitments.
 
 <img width="975" height="835" alt="Screenshot 2025-12-04 at 4 08 04 PM" src="https://github.com/user-attachments/assets/bbd39613-13cd-4689-ae9a-a3cd8c1454ea" />
 
