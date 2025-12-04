@@ -35,6 +35,7 @@ import {
 } from '../utils/bytes';
 import { base58Encode, bech32Encode, base58Decode, bech32Decode } from '../utils/encoding';
 import { hash160, doubleSha256 } from '../utils/hash';
+import { derivePkd } from '../shielded/jubjubHelper';
 
 /**
  * Zcash BIP44 coin type
@@ -151,12 +152,13 @@ export class ZcashKeyDerivation {
 
     // Step 5: Derive shielded spending key
     const spendingKey = this.deriveSpendingKey(accountKey.privateKey, 0);
-    const viewingKey = this.deriveViewingKey(spendingKey);
-    const zAddress = this.generateShieldedAddress(viewingKey);
+    // The viewing key is actually the incoming viewing key (ivk) - a scalar
+    const ivk = this.deriveViewingKey(spendingKey);
+    const zAddress = this.generateShieldedAddress(ivk);
 
     return {
       spendingKey,
-      viewingKey,
+      viewingKey: ivk,
       transparentPrivateKey,
       tAddress,
       zAddress
@@ -331,19 +333,21 @@ export class ZcashKeyDerivation {
   }
 
   /**
-   * Derive viewing key from spending key
+   * Derive incoming viewing key (ivk) from spending key
    * 
-   * The viewing key allows viewing incoming transactions without
-   * the ability to spend. It consists of:
-   * - ak (authorizing key)
-   * - nk (nullifier deriving key)
-   * - ovk (outgoing viewing key)
-   * - ivk (incoming viewing key)
+   * The ivk is a scalar used to:
+   * - Derive pk_d (payment key) via pk_d = [ivk] * DiversifyHash(d)
+   * - Decrypt notes via ECDH: shared_secret = [ivk] * epk
+   * 
+   * Note: This is a simplified derivation. In full Zcash spec, ivk is derived
+   * from (ask, nsk) components of the spending key, but for our use case,
+   * we derive it directly from the spending key using HKDF.
    */
   private deriveViewingKey(spendingKey: Uint8Array): Uint8Array {
-    const salt = new TextEncoder().encode('zcash-sapling-viewing');
-    const info = new TextEncoder().encode('viewing-key-v1');
+    const salt = new TextEncoder().encode('zcash-sapling-ivk');
+    const info = new TextEncoder().encode('incoming-viewing-key-v1');
 
+    // Derive 32-byte ivk scalar
     return hkdf(sha256, spendingKey, salt, info, 32);
   }
 
@@ -376,20 +380,24 @@ export class ZcashKeyDerivation {
   }
 
   /**
-   * Generate shielded (z-address) from viewing key
+   * Generate shielded (z-address) from incoming viewing key (ivk)
    * 
    * For Sapling addresses, the format is:
    * - HRP (human readable part): "zs" for mainnet, "ztestsapling" for testnet
    * - Data: diversifier (11 bytes) + pkd (32 bytes)
    * - Bech32 encoded
+   * 
+   * According to Zcash spec:
+   * - pk_d = [ivk] * DiversifyHash(d) (Jubjub scalar multiplication)
    */
-  generateShieldedAddress(viewingKey: Uint8Array): string {
+  generateShieldedAddress(ivk: Uint8Array): string {
     // Generate diversifier (11 bytes)
-    // In production, this would use the proper diversifier derivation
-    const diversifier = this.deriveDiversifier(viewingKey, 0);
+    const diversifier = this.deriveDiversifier(ivk, 0);
 
-    // Derive payment key (pkd)
-    const pkd = this.derivePaymentKey(viewingKey, diversifier);
+    // Derive payment key (pkd) using correct Zcash spec:
+    // pk_d = [ivk] * DiversifyHash(d)
+    // This is a Jubjub scalar multiplication, NOT a hash!
+    const pkd = derivePkd(ivk, diversifier);
 
     // Combine diversifier and pkd
     const addressData = concatBytes(diversifier, pkd);
@@ -399,36 +407,20 @@ export class ZcashKeyDerivation {
   }
 
   /**
-   * Derive diversifier from viewing key
+   * Derive diversifier from incoming viewing key (ivk)
    * 
    * The diversifier is used to generate multiple payment addresses
    * from the same viewing key, enhancing privacy.
    */
-  private deriveDiversifier(viewingKey: Uint8Array, index: number): Uint8Array {
+  private deriveDiversifier(ivk: Uint8Array, index: number): Uint8Array {
     const input = concatBytes(
       new TextEncoder().encode('diversifier'),
-      viewingKey,
+      ivk,
       numberToLEBytes(index, 4)
     );
 
     // Use first 11 bytes of hash as diversifier
     return sha256(input).slice(0, 11);
-  }
-
-  /**
-   * Derive payment key from viewing key and diversifier
-   */
-  private derivePaymentKey(
-    viewingKey: Uint8Array,
-    diversifier: Uint8Array
-  ): Uint8Array {
-    const input = concatBytes(
-      new TextEncoder().encode('payment-key'),
-      viewingKey,
-      diversifier
-    );
-
-    return sha256(input);
   }
 
   /**
