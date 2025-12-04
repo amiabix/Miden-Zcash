@@ -2,6 +2,8 @@
 
 Zcash transaction signing integration for Miden WebSDK and Browser Wallet. Provides support for transparent and shielded (Sapling) transactions with note scanning, proof generation, and blockchain synchronization.
 
+image.png 
+
 ## Project Structure
 
 This repository contains three main components:

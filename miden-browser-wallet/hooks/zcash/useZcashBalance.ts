@@ -72,10 +72,13 @@ export function useZcashBalance(
 
   useEffect(() => {
     if (tAddress || zAddress) {
+      // Only load once on mount, don't auto-refresh
+      // Auto-refresh was causing balance to reset to 0 on errors
       loadBalances();
       
-      const interval = setInterval(loadBalances, 30000);
-      return () => clearInterval(interval);
+      // Disabled auto-refresh interval to prevent balance from being overwritten
+      // const interval = setInterval(loadBalances, 30000);
+      // return () => clearInterval(interval);
     }
   }, [loadBalances, tAddress, zAddress]);
 

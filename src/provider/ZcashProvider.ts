@@ -293,18 +293,14 @@ export class ZcashProvider {
     const isTransparent = type === 'transparent' || finalAddress.startsWith('tm') || finalAddress.startsWith('t1') || finalAddress.startsWith('t3');
     
     if (isTransparent) {
-      // Check cache first (5 minute TTL)
-      // Only use cache if balance > 0 OR if cache is very recent (< 30 seconds)
-      // This ensures we always fetch fresh data when balance is 0
+      // Check cache first (1 minute TTL for fresh data)
+      // Always fetch fresh data to avoid stale balances
       const cached = this.balanceCache.get(finalAddress);
-      const cacheTTL = 300000; // 5 minutes
-      const shortCacheTTL = 30000; // 30 seconds for zero balances
+      const cacheTTL = 60000; // 1 minute - shorter TTL to get fresh data
       
       if (cached && Date.now() - cached.timestamp < cacheTTL) {
-        // Use cache if balance > 0, or if cache is very recent (even for zero)
-        if (cached.balance.total > 0 || Date.now() - cached.timestamp < shortCacheTTL) {
-          return cached.balance;
-        }
+        // Use cache only if very recent (within 1 minute)
+        return cached.balance;
       }
       
       // Fetch from CipherScan API via proxy (to avoid CORS issues)

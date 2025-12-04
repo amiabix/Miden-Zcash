@@ -37,14 +37,17 @@ export async function GET(request: NextRequest) {
     const cipherscanUrl = `${cipherscanBaseUrl}/api/address/${address}`;
 
     // Fetch from CipherScan API with timeout
+    // Add cache-busting to ensure fresh data
+    const cacheBustUrl = `${cipherscanUrl}${cipherscanUrl.includes('?') ? '&' : '?'}_t=${Date.now()}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
     try {
-      const response = await fetch(cipherscanUrl, {
+      const response = await fetch(cacheBustUrl, {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
+          'Cache-Control': 'no-cache',
         },
         signal: controller.signal
       });

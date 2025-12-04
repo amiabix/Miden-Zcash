@@ -128,17 +128,14 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
         if (account.tAddress) {
           try {
             const tBalance = await module.getBalance(account.tAddress, 'transparent');
-            setTransparentBalance(tBalance);
+            // Only update if we got a valid balance (don't overwrite with 0 on error)
+            if (tBalance && tBalance.total >= 0) {
+              setTransparentBalance(tBalance);
+            }
           } catch (tErr: any) {
             console.error('Failed to fetch transparent balance:', tErr);
-            // Set zero balance on error to show something
-            setTransparentBalance({
-              confirmed: 0,
-              unconfirmed: 0,
-              total: 0,
-              pending: 0,
-              unit: 'zatoshi'
-            });
+            // Don't set balance to 0 on error - keep existing balance
+            // This prevents background sync from overwriting valid balances
           }
         }
 
@@ -146,17 +143,13 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
         if (account.zAddress) {
           try {
             const zBalance = await module.getBalance(account.zAddress, 'shielded');
-            setShieldedBalance(zBalance);
+            // Only update if we got a valid balance (don't overwrite with 0 on error)
+            if (zBalance && zBalance.total >= 0) {
+              setShieldedBalance(zBalance);
+            }
           } catch (zErr: any) {
             console.error('Failed to fetch shielded balance:', zErr);
-            // Set zero balance on error
-            setShieldedBalance({
-              confirmed: 0,
-              unconfirmed: 0,
-              total: 0,
-              pending: 0,
-              unit: 'zatoshi'
-            });
+            // Don't set balance to 0 on error - keep existing balance
           }
         }
       })();
@@ -167,8 +160,10 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
       console.error('Balance refresh error:', error);
       setBalanceError(error);
       
-      // Set zero balances on timeout/error so UI doesn't stay in loading state
-      if (account.tAddress) {
+      // Don't set balance to 0 on error - keep existing balance
+      // This prevents background sync from overwriting valid balances with 0
+      // Only set to 0 if we don't have a balance yet (first load)
+      if (account.tAddress && !transparentBalance) {
         setTransparentBalance({
           confirmed: 0,
           unconfirmed: 0,
@@ -177,7 +172,7 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
           unit: 'zatoshi'
         });
       }
-      if (account.zAddress) {
+      if (account.zAddress && !shieldedBalance) {
         setShieldedBalance({
           confirmed: 0,
           unconfirmed: 0,
@@ -189,7 +184,7 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setBalanceLoading(false);
     }
-  }, [module, account]);
+  }, [module, account, transparentBalance, shieldedBalance]);
 
   /**
    * Initialize Zcash module
@@ -250,9 +245,11 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
       // });
 
       // Start balance refresh interval (every 30 seconds)
-      balanceIntervalRef.current = setInterval(() => {
-        refreshBalance();
-      }, 30000);
+      // Disable auto-refresh interval - let user manually refresh
+      // Auto-refresh was causing balance to reset to 0 on errors
+      // balanceIntervalRef.current = setInterval(() => {
+      //   refreshBalance();
+      // }, 30000);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error('[ZcashProvider] Initialization failed:', err);
@@ -331,8 +328,9 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
 
     const unsubscribe = module.onAccountChange((newAccount) => {
       setAccount(newAccount);
-      // Refresh balance when account changes
-      refreshBalance();
+      // Only refresh balance if account actually changed (not on every event)
+      // Don't auto-refresh to avoid overwriting valid balances
+      // User can manually refresh if needed
     });
 
     return () => {
@@ -342,10 +340,13 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
 
   // Refresh balance when account changes (but only once, not on every render)
   useEffect(() => {
-    if (account && account.tAddress) {
-      // Only auto-refresh if we don't have a balance yet
-      if (!transparentBalance && !balanceLoading) {
-        refreshBalance();
+    if (account && (account.tAddress || account.zAddress)) {
+      // Only auto-refresh if we don't have a balance yet (first load)
+      // Don't auto-refresh if we already have a balance to avoid overwriting it
+      if ((!transparentBalance && account.tAddress) || (!shieldedBalance && account.zAddress)) {
+        if (!balanceLoading) {
+          refreshBalance();
+        }
       }
     }
   }, [account?.tAddress, account?.zAddress]); // Only depend on addresses, not the whole account object

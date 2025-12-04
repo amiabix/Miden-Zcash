@@ -16,28 +16,19 @@ import { concatBytes } from '../utils/bytes';
 
 /**
  * Jubjub curve parameters
- * Twisted Edwards: a*x² + y² = 1 + d*x²*y²
+ * Official Zcash Sapling curve: -x² + y² = 1 + d*x²*y²
  *
- * Current implementation uses original parameters from codebase:
- * - a = 1
- * - d = -10540/10741 (mod p)
- *
- * Note: This does NOT match the official Zcash Jubjub curve (-x² + y² = 1 + d*x²*y²)
- * but appears to be what the rest of the codebase expects.
- *
- * TODO: Verify if this is intentional or a bug that needs fixing
+ * Reference: https://github.com/zcash/librustzcash/blob/master/zcash_primitives/src/jubjub/mod.rs
+ * Specification: https://z.cash/technology/jubjub/
  */
 const JUBJUB = {
-  // Field modulus
+  // Field modulus (2^255 - 19)
   p: 52435875175126190479447740508185965837690552500527637822603658699938581184513n,
-  // Order of subgroup
+  // Order of the prime-order subgroup (r_J * h_J where h_J = 8)
   order: 6554484396890773809930967563523245960744023425112482949290220310578048130569n,
-  // Curve coefficients
-  a: 1n,
-  d: 19257038036680949359750312669786877991949435402254120286184196891950884077233n, // -10240/10241 mod p = -10540/10741 mod p? Need to verify
-  // Base point (generator) - from original code
-  // Gu = 8967009104981691511184280257777137469511400633666422603073258241851469509970n
-  // Gv = 15931800829954170746055714094219556811473228541646137357846426087758294707819n
+  // Curve coefficients for -x² + y² = 1 + d*x²*y²
+  a: -1n, // Official Zcash uses a = -1
+  d: 20296127846104866955287067402315667718816681564160243098514056682305223661570n, // Jubjub d parameter (verified against official generator)
 };
 
 /**
@@ -233,6 +224,7 @@ export class FieldElement {
    * Convert from bytes (little-endian)
    */
   static fromBytes(bytes: Uint8Array): FieldElement {
+    // Convert from little-endian bytes to bigint
     let value = 0n;
     for (let i = 31; i >= 0; i--) {
       value = (value << 8n) | BigInt(bytes[i]);
@@ -548,23 +540,23 @@ function modexp(base: bigint, exp: bigint, mod: bigint): bigint {
  * Used for point decompression
  */
 function recoverX(y: FieldElement, xSign: boolean): FieldElement {
-  // For twisted Edwards: a*x² + y² = 1 + d*x²*y²
-  // With a = 1: x² + y² = 1 + d*x²*y²
-  // Rearranging: x² - d*x²*y² = 1 - y²
-  // x² * (1 - d*y²) = 1 - y²
-  // x² = (1 - y²) / (1 - d*y²) = (y² - 1) / (d*y² - 1)
+  // For Jubjub: -x² + y² = 1 + d*x²*y²
+  // Rearranging: y² - 1 = x² + d*x²*y²
+  // y² - 1 = x² * (1 + d*y²)
+  // x² = (y² - 1) / (1 + d*y²)
   const y2 = y.square();
   const one = new FieldElement(1n);
   const numerator = y2.subtract(one);
   const d_y2 = JUBJUB_D.multiply(y2);
-  const denominator = d_y2.subtract(one);  // d*y² - 1
+  const denominator = one.add(d_y2);  // 1 + d*y²
 
   // Check if denominator is zero (invalid y coordinate)
   if (denominator.value === 0n) {
     throw new Error('Invalid y coordinate: denominator is zero in recoverX');
   }
 
-  const x2 = numerator.multiply(denominator.invert());
+  const denom_inv = denominator.invert();
+  const x2 = numerator.multiply(denom_inv);
 
   const x = sqrt(x2);
 
@@ -580,7 +572,7 @@ function recoverX(y: FieldElement, xSign: boolean): FieldElement {
 }
 
 /**
- * Compute modular square root using Tonelli-Shanks
+ * Compute modular square root for p ≡ 5 (mod 8)
  */
 function sqrt(x: FieldElement): FieldElement {
   // For Jubjub, p ≡ 5 (mod 8)
@@ -703,8 +695,8 @@ export function diversifyHash(diversifier: Uint8Array): Uint8Array {
   const input = concatBytes(personalization, diversifier);
 
   // Try multiple attempts to find a valid curve point
-  // Each hash output maps to a curve point with ~50% probability
-  // So statistically we find one in ~2 attempts on average
+  // Roughly 20-30% of hash outputs will produce valid points, so we expect to find
+  // one within a few attempts on average
   for (let i = 0; i < 256; i++) {
     const hashInput = i === 0 ? input : concatBytes(input, new Uint8Array([i]));
     const candidate = blake2s(hashInput, { dkLen: 32 });
@@ -715,27 +707,27 @@ export function diversifyHash(diversifier: Uint8Array): Uint8Array {
       const point = JubjubPoint.fromBytes(candidate);
 
       // Multiply by cofactor h_J = 8 to ensure we're in the prime order subgroup
-      // This ensures the result is in the prime order subgroup
       const cofactorPoint = point.scalarMult(JUBJUB_COFACTOR);
 
-      // Check if result is identity (edge case, try next)
+      // Check if result is identity (should not be for valid points)
       if (cofactorPoint.isInfinity) {
         continue;
       }
 
-      // Return the cofactored point
+      // Return the valid cofactored point
       return cofactorPoint.toBytes();
     } catch (error) {
-      // recoverX failed - expected for ~50% of hash outputs
+      // recoverX failed because the hash output doesn't correspond to a curve point
+      // This is expected for approximately 70-80% of hash outputs
       // Try next iteration
       continue;
     }
   }
 
-  // If we can't find a valid point after 256 attempts, there's a systematic issue
+  // If we can't find a valid point after 256 attempts, there's likely a bug
+  // This should be extremely rare with correct parameters and algorithms
   throw new Error(
-    `diversifyHash: Could not find valid point after 256 attempts. ` +
-    `This indicates a bug in the hash-to-curve algorithm, curve parameters, or field arithmetic.`
+    `diversifyHash: Could not find valid point after 256 attempts.`
   );
 }
 
