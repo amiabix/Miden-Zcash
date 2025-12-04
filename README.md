@@ -248,24 +248,6 @@ The health check script (`npm run zcash:health`) verifies external dependencies 
 
 The proving service is built with `cargo build --release` in the `proving-service/` directory. Run the service with `cargo run`, which starts an HTTP server on port 8081 by default. The service requires Sapling parameter files at `../miden-browser-wallet/public/params/sapling-*.params` or paths specified via environment variables.
 
-## Recent Updates
-
-### Critical Fixes
-
-- **ECDH Bug Fix:** Fixed critical bug in shielded address derivation where `pk_d` was incorrectly derived using SHA256 instead of Jubjub scalar multiplication. The correct derivation is `pk_d = [ivk] * DiversifyHash(d)`.
-
-- **ZEC to Zatoshi Conversion:** Fixed unit mismatch where RPC responses from zcashd return amounts in ZEC (decimal) but the system expects zatoshi (integer). The RPC client now automatically converts all amounts from ZEC to zatoshi when processing `listunspent` responses.
-
-- **Automatic Address Import:** Implemented automatic import of transparent addresses into the local zcashd node using `importaddress` RPC command. This ensures `listunspent` can discover UTXOs without manual intervention.
-
-- **Viewing Key Caching:** Implemented proper caching of incoming viewing keys (ivk) when addresses are loaded, enabling note scanning for shielded addresses.
-
-- **Auto-Sync for Transactions:** Transparent addresses are automatically synced before transaction building if no UTXOs are found in the cache.
-
-- **Error Handling Improvements:** Enhanced error messages with detailed diagnostics, unit conversion safeguards, and proper handling of node reindexing states.
-
-- **Tatum API Removal:** Removed all references to Tatum API. The wallet now exclusively uses local zcashd nodes.
-
 ## License
 
 MIT
