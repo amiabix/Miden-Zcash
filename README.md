@@ -148,10 +148,7 @@ Note decryption uses the incoming viewing key and the ephemeral public key from 
 
 After decryption, the note commitment is verified to match the commitment in the output description. If valid, the note is added to the note cache along with its Merkle tree witness. The Merkle tree is updated incrementally by appending the new commitment as a leaf and recomputing the root.
 
-<<<<<<< HEAD
 The incoming viewing key (ivk) is cached when addresses are loaded to enable note scanning. The viewing key is derived from the account's spending key and stored in the note cache for efficient note discovery.
-=======
->>>>>>> 8b5282baa0cab2145c31cc0a0868f944a6a2863f
 
 ## Transaction Building
 
