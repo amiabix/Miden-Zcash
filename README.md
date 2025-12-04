@@ -146,18 +146,6 @@ The incoming viewing key (ivk) is cached when addresses are loaded to enable not
 
 link to the explorer: https://testnet.cipherscan.app/address/tmQpa1o4w5QMnjhv7bS1tN6iHiragzYvF6Q
 
-## Development
-
-Build the SDK by running `npm run build` in the root directory. This compiles TypeScript source files to JavaScript in the `dist/` directory. Type checking without building is done with `npm run build:check`. Watch mode for development is available with `npm run build:watch`.
-
-Run tests with `npm run test:unit` for unit tests, `npm run test:e2e` for end-to-end tests, and `npm run test:shielded` for shielded transaction tests. Coverage reports are generated with `npm run test:coverage`. Tests use Jest as the test runner and mock RPC responses for isolated testing.
-
-Linting is performed with ESLint using `npm run lint`, and auto-fixing is available with `npm run lint:fix`. Code formatting uses Prettier with `npm run format` to format and `npm run format:check` to verify formatting.
-
-The health check script (`npm run zcash:health`) verifies external dependencies including Sapling parameter files, WASM prover files, and RPC endpoint connectivity. The setup script (`npm run zcash:setup`) downloads required dependencies to the correct locations.
-
-The proving service is built with `cargo build --release` in the `proving-service/` directory. Run the service with `cargo run`, which starts an HTTP server on port 8081 by default. The service requires Sapling parameter files at `../miden-browser-wallet/public/params/sapling-*.params` or paths specified via environment variables.
-
 ## Repository
 
 https://github.com/amiabix/Miden-Zcash
