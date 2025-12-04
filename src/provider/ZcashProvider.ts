@@ -312,9 +312,9 @@ export class ZcashProvider {
           ? `/api/zcash/balance?address=${encodeURIComponent(finalAddress)}&network=${this.network}`
           : `${this.network === 'testnet' ? 'https://testnet.cipherscan.app' : 'https://cipherscan.app'}/api/address/${finalAddress}`;
         
-        // Add timeout to prevent hanging
+        // Add timeout to prevent hanging (increased for slow networks)
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
         
         const response = await fetch(proxyUrl, {
           method: isBrowser ? 'GET' : 'GET',
@@ -371,18 +371,10 @@ export class ZcashProvider {
           return cached.balance;
         }
         
-        // If timeout, return zero balance instead of throwing
+        // If timeout, throw error instead of returning zero
+        // This prevents overwriting valid balances with 0
         if (isTimeout) {
-          console.warn('CipherScan API timeout, returning zero balance');
-          const zeroBalance: Balance = {
-            confirmed: 0,
-            unconfirmed: 0,
-            total: 0,
-            pending: 0,
-            unit: 'zatoshi'
-          };
-          this.balanceCache.set(finalAddress, { balance: zeroBalance, timestamp: Date.now() });
-          return zeroBalance;
+          throw new Error('CipherScan API timeout - balance fetch failed');
         }
         
         // Throw error for other issues
@@ -623,10 +615,30 @@ export class ZcashProvider {
 
     if (!noteSelection || noteSelection.notes.length === 0) {
       const balance = this.noteCache.getBalance(account.zAddress);
-      throw new Error(
-        `Insufficient shielded funds. Need ${amount} zatoshi (${Number(amount) / 100000000} ZEC), ` +
-        `available: ${balance.total} zatoshi`
-      );
+      const spendableNotes = this.noteCache.getSpendableNotes(account.zAddress);
+      const allNotes = this.noteCache.getNotesForAddress(account.zAddress);
+      
+      // Provide helpful error message based on cache state
+      if (allNotes.length === 0) {
+        throw new Error(
+          `No shielded notes found for address ${account.zAddress.slice(0, 20)}...\n\n` +
+          `The wallet hasn't scanned the blockchain for your shielded notes yet.\n\n` +
+          `To send shielded transactions, you need to:\n` +
+          `1. Sync your shielded address first using syncAddress(address, 'shielded')\n` +
+          `2. This will scan the blockchain and discover your notes\n` +
+          `3. Once notes are discovered, you can spend them\n\n` +
+          `Note: Syncing requires RPC access to scan blocks.`
+        );
+      } else if (spendableNotes.length === 0) {
+        throw new Error(
+          `No spendable notes available. All ${allNotes.length} notes may be spent or locked.`
+        );
+      } else {
+        throw new Error(
+          `Insufficient shielded funds. Need ${amount} zatoshi (${Number(amount) / 100000000} ZEC), ` +
+          `available: ${balance.total} zatoshi (${spendableNotes.length} spendable notes)`
+        );
+      }
     }
 
     // Get current anchor for merkle tree validation
@@ -706,7 +718,8 @@ export class ZcashProvider {
     const inputs = await this.txBuilder.selectUTXOs(
       params.from.address,
       params.amount,
-      params.fee
+      params.fee,
+      this.utxoCache // Pass UTXO cache for fallback when RPC doesn't support listunspent
     );
 
     // Build outputs
@@ -742,11 +755,12 @@ export class ZcashProvider {
     params: TransactionParams,
     keys: ZcashKeys
   ): Promise<SignedTransaction> {
-    // Get UTXOs using transaction builder
+    // Get UTXOs using transaction builder (with UTXO cache fallback)
     const transparentInputs = await this.txBuilder.selectUTXOs(
       params.from.address,
       params.amount,
-      params.fee
+      params.fee,
+      this.utxoCache // Pass UTXO cache for fallback when RPC doesn't support listunspent
     );
 
     // Build shielding transaction
@@ -819,7 +833,21 @@ export class ZcashProvider {
     );
 
     if (!noteSelection) {
-      throw new Error('Insufficient shielded funds');
+      const allNotes = this.noteCache.getNotesForAddress(params.from.address);
+      const spendableNotes = this.noteCache.getSpendableNotes(params.from.address);
+      
+      if (allNotes.length === 0) {
+        throw new Error(
+          `No shielded notes found. Please sync your shielded address first using syncAddress(address, 'shielded'). ` +
+          `This scans the blockchain to discover your notes.`
+        );
+      } else {
+        const balance = this.noteCache.getBalance(params.from.address);
+        throw new Error(
+          `Insufficient shielded funds. Need ${params.amount} zatoshi, ` +
+          `available: ${balance.total} zatoshi (${spendableNotes.length} spendable notes)`
+        );
+      }
     }
 
     // Get current anchor from commitment tree state
@@ -889,7 +917,21 @@ export class ZcashProvider {
     );
 
     if (!noteSelection) {
-      throw new Error('Insufficient shielded funds');
+      const allNotes = this.noteCache.getNotesForAddress(params.from.address);
+      const spendableNotes = this.noteCache.getSpendableNotes(params.from.address);
+      
+      if (allNotes.length === 0) {
+        throw new Error(
+          `No shielded notes found. Please sync your shielded address first using syncAddress(address, 'shielded'). ` +
+          `This scans the blockchain to discover your notes.`
+        );
+      } else {
+        const balance = this.noteCache.getBalance(params.from.address);
+        throw new Error(
+          `Insufficient shielded funds. Need ${params.amount} zatoshi, ` +
+          `available: ${balance.total} zatoshi (${spendableNotes.length} spendable notes)`
+        );
+      }
     }
 
     // Get current anchor from commitment tree state
@@ -1027,9 +1069,22 @@ export class ZcashProvider {
     const blockCount = await this.rpcClient.getBlockCount();
 
     if (type === 'transparent') {
-      // Sync transparent address
-      const utxos = await this.rpcClient.listUnspent(1, 9999999, [finalAddress]);
-      this.utxoCache.updateUTXOs(finalAddress, utxos, blockCount);
+      // Sync transparent address - try to get UTXOs
+      let utxos: any[] = [];
+      try {
+        utxos = await this.rpcClient.listUnspent(1, 9999999, [finalAddress]);
+        this.utxoCache.updateUTXOs(finalAddress, utxos, blockCount);
+      } catch (utxoError: any) {
+        const errorMsg = utxoError?.message || String(utxoError || '');
+        if (errorMsg.includes('not found') || errorMsg.includes('Method not found') || errorMsg.includes('listunspent')) {
+          // RPC doesn't support listunspent - this is expected for Tatum
+          // We can't populate UTXO cache, but we can still get balance
+          console.warn(`[ZcashProvider] listunspent not supported - cannot populate UTXO cache for ${finalAddress}`);
+        } else {
+          // Re-throw other errors
+          throw utxoError;
+        }
+      }
 
       // Transaction history fetching not yet implemented
 
@@ -1037,7 +1092,7 @@ export class ZcashProvider {
 
       return {
         address: finalAddress,
-        newTransactions: 0, // Transaction tracking requires additional implementation
+        newTransactions: utxos.length, // Number of UTXOs found (0 if listunspent not supported)
         updatedBalance: balance,
         lastSynced: Date.now(),
         blockHeight: blockCount

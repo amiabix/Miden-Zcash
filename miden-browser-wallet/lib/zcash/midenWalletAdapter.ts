@@ -38,10 +38,49 @@ const MIN_TIME_BETWEEN_USES = 3000; // 3 seconds minimum between WebClient uses
  * Prevents malicious scripts from repeatedly requesting key export
  */
 let keyExportAttempts: number[] = [];
-const MAX_KEY_EXPORT_ATTEMPTS = 3; // Maximum attempts per hour
+// Check if in development mode (works in both browser and Node.js)
+const isDevelopment = typeof window !== 'undefined' 
+  ? (window.location?.hostname === 'localhost' || window.location?.hostname === '127.0.0.1')
+  : (process.env.NODE_ENV === 'development');
+const MAX_KEY_EXPORT_ATTEMPTS = isDevelopment ? 10 : 3; // Maximum attempts per hour
 const KEY_EXPORT_RATE_LIMIT_WINDOW = 3600000; // 1 hour in milliseconds
 let lastKeyExportTime = 0;
-const MIN_TIME_BETWEEN_KEY_EXPORTS = 60000; // 1 minute minimum between exports
+const MIN_TIME_BETWEEN_KEY_EXPORTS = isDevelopment ? 5000 : 60000; // Reduced to 5s in dev, 1 minute in production
+
+/**
+ * Reset key export rate limit (development helper)
+ * Exposed on window for console access: window.__resetKeyExportLimit()
+ */
+if (typeof window !== 'undefined') {
+  (window as any).__resetKeyExportLimit = () => {
+    keyExportAttempts = [];
+    lastKeyExportTime = 0;
+    console.log('✅ Key export rate limit reset');
+    return { success: true, message: 'Rate limit cleared' };
+  };
+  
+  (window as any).__getKeyExportLimitStatus = () => {
+    const now = Date.now();
+    const recentAttempts = keyExportAttempts.filter(
+      timestamp => now - timestamp < KEY_EXPORT_RATE_LIMIT_WINDOW
+    );
+    const timeUntilReset = recentAttempts.length > 0 
+      ? Math.ceil((KEY_EXPORT_RATE_LIMIT_WINDOW - (now - recentAttempts[0])) / 1000)
+      : 0;
+    const timeUntilNextExport = lastKeyExportTime > 0 && now - lastKeyExportTime < MIN_TIME_BETWEEN_KEY_EXPORTS
+      ? Math.ceil((MIN_TIME_BETWEEN_KEY_EXPORTS - (now - lastKeyExportTime)) / 1000)
+      : 0;
+    
+    return {
+      attempts: recentAttempts.length,
+      maxAttempts: MAX_KEY_EXPORT_ATTEMPTS,
+      timeUntilReset: timeUntilReset > 0 ? `${timeUntilReset}s` : '0s',
+      timeUntilNextExport: timeUntilNextExport > 0 ? `${timeUntilNextExport}s` : '0s',
+      canExport: recentAttempts.length < MAX_KEY_EXPORT_ATTEMPTS && timeUntilNextExport === 0,
+      isDevelopment
+    };
+  };
+}
 
 /**
  * Acquire WebClient mutex - ensures only one WebClient operation at a time

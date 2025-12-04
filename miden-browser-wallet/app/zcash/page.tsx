@@ -124,6 +124,43 @@ export default function ZcashPage() {
     }
   };
 
+  const handleSyncTransparent = async () => {
+    if (!addresses.tAddress) {
+      toast.error('No transparent address available. Please load addresses first.');
+      return;
+    }
+
+    if (!module) {
+      toast.error('Zcash module not initialized');
+      return;
+    }
+
+    try {
+      toast.info('Syncing transparent address... This may take a moment.');
+      const provider = module.getProvider();
+      const result = await provider.syncAddress(addresses.tAddress, 'transparent');
+      toast.success(`Sync complete! Balance: ${(result.updatedBalance.total / 100000000).toFixed(8)} ZEC`);
+      await refreshBalance();
+    } catch (err: any) {
+      const errorMsg = err?.message || 'Failed to sync transparent address';
+      console.error('Transparent sync error:', err);
+      
+      if (errorMsg.includes('listunspent') || errorMsg.includes('not supported') || errorMsg.includes('Method not found')) {
+        toast.error(
+          'Sync failed: RPC endpoint does not support "listunspent" method.\n\n' +
+          'Tatum API has limited RPC support. To send transactions, you need:\n' +
+          '1. A full Zcash node, or\n' +
+          '2. Use a different RPC endpoint that supports listunspent',
+          { duration: 10000 }
+        );
+      } else if (errorMsg.includes('429') || errorMsg.includes('Rate limit')) {
+        toast.error('Rate limit exceeded. Please wait before trying again.');
+      } else {
+        toast.error(`Sync failed: ${errorMsg}`);
+      }
+    }
+  };
+
   // Loading state - show content even if account is still loading
   // But also show error if initialization failed
   if (!isInitialized && !zcashError) {
@@ -234,8 +271,15 @@ export default function ZcashPage() {
               {addresses.tAddress && (
                 <Button 
                   onClick={() => setShowSendDialog(true)}
-                  disabled={!isRPCConnected}
+                  disabled={!isRPCConnected || !transparentBalance || transparentBalance.total === 0}
                   variant="default"
+                  title={
+                    !isRPCConnected 
+                      ? 'RPC not connected - cannot send transactions' 
+                      : (!transparentBalance || transparentBalance.total === 0) 
+                        ? 'No balance available' 
+                        : 'Send Zcash (Note: Requires full Zcash node for transparent transactions)'
+                  }
                 >
                   <Send className="w-4 h-4 mr-2" />
                   Send
@@ -299,13 +343,23 @@ export default function ZcashPage() {
               </div>
             )}
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <Button 
                 onClick={handleLoadBalance} 
                 disabled={balanceLoading || (!addresses.tAddress && !addresses.zAddress)}
               >
                 {balanceLoading ? 'Loading...' : 'Refresh Balance'}
               </Button>
+              {addresses.tAddress && (
+                <Button 
+                  onClick={handleSyncTransparent} 
+                  disabled={balanceLoading}
+                  variant="outline"
+                  title="Sync transparent address to populate UTXO cache. Note: Will fail on Tatum API (doesn't support listunspent)"
+                >
+                  Sync Transparent Address
+                </Button>
+              )}
               {addresses.zAddress && (
                 <Button 
                   onClick={handleSyncShielded} 
@@ -317,14 +371,21 @@ export default function ZcashPage() {
               )}
             </div>
             {addresses.tAddress && (
-              <a 
-                href={`https://testnet.cipherscan.app/address/${addresses.tAddress}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-blue-600 dark:text-blue-400 hover:underline block mt-2"
-              >
-                View on CipherScan Testnet →
-              </a>
+              <div className="mt-2 space-y-1">
+                <a 
+                  href={`https://testnet.cipherscan.app/address/${addresses.tAddress}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline block"
+                >
+                  View on CipherScan Testnet →
+                </a>
+                {!isRPCConnected && (
+                  <p className="text-xs text-yellow-600 dark:text-yellow-400">
+                    ⚠️ Sending requires a full Zcash node (Tatum API doesn't support listunspent)
+                  </p>
+                )}
+              </div>
             )}
           </CardContent>
         </Card>

@@ -70,17 +70,55 @@ export class ZcashTransactionBuilder {
 
   /**
    * Select UTXOs for transaction
+   * 
+   * @param utxoCache - Optional UTXO cache to use instead of RPC
    */
   async selectUTXOs(
     address: string,
     amount: number,
-    fee?: number
+    fee?: number,
+    utxoCache?: { getUTXOs: (address: string) => Array<{ txid: string; vout: number; amount: number; scriptPubKey: string; confirmations: number }> }
   ): Promise<TransparentInput[]> {
-    // Get available UTXOs
-    const utxos = await this.config.rpcClient.listUnspent(1, 9999999, [address]);
+    let utxos: Array<{ txid: string; vout: number; amount: number; scriptPubKey: string; confirmations: number }> = [];
+    
+    // Try UTXO cache first if available
+    if (utxoCache) {
+      const cachedUtxos = utxoCache.getUTXOs(address);
+      if (cachedUtxos.length > 0) {
+        utxos = cachedUtxos.map(utxo => ({
+          txid: utxo.txid,
+          vout: utxo.vout,
+          amount: utxo.amount,
+          scriptPubKey: utxo.scriptPubKey,
+          confirmations: utxo.confirmations || 0
+        }));
+      }
+    }
+    
+    // If cache is empty, try RPC
+    if (utxos.length === 0) {
+      try {
+        utxos = await this.config.rpcClient.listUnspent(1, 9999999, [address]);
+      } catch (error: any) {
+        const errorMsg = error?.message || String(error || '');
+        if (errorMsg.includes('not found') || errorMsg.includes('Method not found')) {
+          // Tatum and some RPC endpoints don't support listunspent
+          // For any transparent transaction (t->t or t->z), we need UTXOs
+          throw new Error(
+            `Cannot build transaction: RPC method 'listunspent' not supported by this endpoint.\n\n` +
+            `To send transparent transactions, you need UTXOs which require:\n` +
+            `1. A full Zcash node (supports listunspent), OR\n` +
+            `2. Sync your address first (but sync also requires listunspent)\n\n` +
+            `Current limitation: Tatum API and some RPC endpoints don't support listunspent.\n` +
+            `This prevents building transparent transactions without a full node.`
+          );
+        }
+        throw error;
+      }
+    }
 
     if (utxos.length === 0) {
-      throw new Error('No UTXOs available for address');
+      throw new Error('No UTXOs available for address. Please sync the address first using syncAddress().');
     }
 
     // Sort by value (largest first)

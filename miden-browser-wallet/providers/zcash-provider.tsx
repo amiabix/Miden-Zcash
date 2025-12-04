@@ -118,25 +118,40 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
       setBalanceLoading(true);
       setBalanceError(null);
 
-      // Add timeout to prevent infinite loading
+      // Add timeout to prevent infinite loading (increased to 20 seconds for slow networks)
       const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Balance fetch timeout')), 15000)
+        setTimeout(() => reject(new Error('Balance fetch timeout')), 20000)
       );
 
       const balancePromise = (async () => {
         // Fetch transparent balance
         if (account.tAddress) {
           try {
+            console.log('[ZcashProvider] Fetching transparent balance for:', account.tAddress);
             const tBalance = await module.getBalance(account.tAddress, 'transparent');
+            console.log('[ZcashProvider] Transparent balance received:', tBalance);
             // Only update if we got a valid balance (don't overwrite with 0 on error)
             if (tBalance && tBalance.total >= 0) {
               setTransparentBalance(tBalance);
+              console.log('[ZcashProvider] Transparent balance set to:', tBalance.total, 'zatoshi');
+            } else if (tBalance && tBalance.total === 0) {
+              // Only set to 0 if API explicitly returns 0 (not on error)
+              setTransparentBalance(tBalance);
+              console.log('[ZcashProvider] Transparent balance is 0 (confirmed by API)');
             }
+            // If error, don't update balance at all - keep existing value
           } catch (tErr: any) {
-            console.error('Failed to fetch transparent balance:', tErr);
+            const isTimeout = tErr?.message?.includes('timeout') || tErr?.message?.includes('Timeout');
+            if (isTimeout) {
+              console.warn('[ZcashProvider] Transparent balance fetch timeout - keeping existing balance');
+            } else {
+              console.error('[ZcashProvider] Failed to fetch transparent balance:', tErr);
+            }
             // Don't set balance to 0 on error - keep existing balance
             // This prevents background sync from overwriting valid balances
           }
+        } else {
+          console.warn('[ZcashProvider] No transparent address available for balance fetch');
         }
 
         // Fetch shielded balance
@@ -146,9 +161,18 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
             // Only update if we got a valid balance (don't overwrite with 0 on error)
             if (zBalance && zBalance.total >= 0) {
               setShieldedBalance(zBalance);
+            } else if (zBalance && zBalance.total === 0) {
+              // Only set to 0 if API explicitly returns 0 (not on error)
+              setShieldedBalance(zBalance);
             }
+            // If error, don't update balance at all - keep existing value
           } catch (zErr: any) {
-            console.error('Failed to fetch shielded balance:', zErr);
+            const isTimeout = zErr?.message?.includes('timeout') || zErr?.message?.includes('Timeout');
+            if (isTimeout) {
+              console.warn('Shielded balance fetch timeout - keeping existing balance');
+            } else {
+              console.error('Failed to fetch shielded balance:', zErr);
+            }
             // Don't set balance to 0 on error - keep existing balance
           }
         }
@@ -157,30 +181,21 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
       await Promise.race([balancePromise, timeoutPromise]);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      console.error('Balance refresh error:', error);
-      setBalanceError(error);
+      const isTimeout = error.message.includes('timeout') || error.message.includes('Timeout');
       
-      // Don't set balance to 0 on error - keep existing balance
-      // This prevents background sync from overwriting valid balances with 0
-      // Only set to 0 if we don't have a balance yet (first load)
-      if (account.tAddress && !transparentBalance) {
-        setTransparentBalance({
-          confirmed: 0,
-          unconfirmed: 0,
-          total: 0,
-          pending: 0,
-          unit: 'zatoshi'
-        });
+      if (isTimeout) {
+        console.warn('Balance fetch timeout - keeping existing balance');
+        // On timeout, don't log as error - just keep existing balance
+        // Don't set balanceError for timeouts to avoid UI confusion
+      } else {
+        console.error('Balance refresh error:', error);
+        setBalanceError(error);
       }
-      if (account.zAddress && !shieldedBalance) {
-        setShieldedBalance({
-          confirmed: 0,
-          unconfirmed: 0,
-          total: 0,
-          pending: 0,
-          unit: 'zatoshi'
-        });
-      }
+      
+      // NEVER set balance to 0 on error/timeout - always keep existing balance
+      // Don't set balance to 0 on error - keep existing balance or leave as null
+      // This prevents showing "0" when balance hasn't been fetched yet
+      // The UI will show "No balance loaded" if balance is null, which is better than showing "0"
     } finally {
       setBalanceLoading(false);
     }
@@ -339,17 +354,33 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
   }, [module]);
 
   // Refresh balance when account changes (but only once, not on every render)
+  // Use ref to track if we've already loaded balance for these addresses
+  const balanceLoadedRef = useRef<{ tAddress?: string; zAddress?: string }>({});
+  
   useEffect(() => {
     if (account && (account.tAddress || account.zAddress)) {
-      // Only auto-refresh if we don't have a balance yet (first load)
-      // Don't auto-refresh if we already have a balance to avoid overwriting it
-      if ((!transparentBalance && account.tAddress) || (!shieldedBalance && account.zAddress)) {
-        if (!balanceLoading) {
+      const currentTAddress = account.tAddress || undefined;
+      const currentZAddress = account.zAddress || undefined;
+      const loadedTAddress = balanceLoadedRef.current.tAddress;
+      const loadedZAddress = balanceLoadedRef.current.zAddress;
+      
+      // Only refresh if addresses actually changed (not just on every render)
+      const addressesChanged = 
+        currentTAddress !== loadedTAddress || 
+        currentZAddress !== loadedZAddress;
+      
+      // Only auto-refresh if addresses changed AND we don't have a balance yet
+      if (addressesChanged && !balanceLoading) {
+        if ((!transparentBalance && currentTAddress) || (!shieldedBalance && currentZAddress)) {
+          balanceLoadedRef.current = { tAddress: currentTAddress, zAddress: currentZAddress };
           refreshBalance();
+        } else if (addressesChanged) {
+          // Addresses changed but we have balance - just update the ref
+          balanceLoadedRef.current = { tAddress: currentTAddress, zAddress: currentZAddress };
         }
       }
     }
-  }, [account?.tAddress, account?.zAddress]); // Only depend on addresses, not the whole account object
+  }, [account?.tAddress, account?.zAddress, transparentBalance, shieldedBalance, balanceLoading, refreshBalance]);
 
   const value: ZcashContextType = {
     // Module state

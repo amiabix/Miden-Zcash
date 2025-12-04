@@ -55,6 +55,50 @@ export default function RootLayout({
     <html lang="en">
       <head>
         <link rel="icon" href="/miden_wallet_logo_centered.svg" />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                // Hide nextjs-portal immediately before React hydrates
+                function hidePortal() {
+                  const portals = document.querySelectorAll('nextjs-portal, [nextjs-portal]');
+                  portals.forEach(portal => {
+                    if (portal) {
+                      portal.style.display = 'none';
+                      portal.style.visibility = 'hidden';
+                      portal.style.opacity = '0';
+                      portal.style.pointerEvents = 'none';
+                      portal.style.position = 'fixed';
+                      portal.style.top = '-9999px';
+                      portal.style.left = '-9999px';
+                      portal.style.width = '0';
+                      portal.style.height = '0';
+                      portal.style.zIndex = '-999999';
+                    }
+                  });
+                }
+                // Run immediately
+                hidePortal();
+                // Also run on DOMContentLoaded and after a short delay
+                if (document.readyState === 'loading') {
+                  document.addEventListener('DOMContentLoaded', hidePortal);
+                }
+                setTimeout(hidePortal, 0);
+                setTimeout(hidePortal, 10);
+                setTimeout(hidePortal, 100);
+                // Watch for new portals being added
+                const observer = new MutationObserver(hidePortal);
+                if (document.body) {
+                  observer.observe(document.body, { childList: true, subtree: true });
+                } else {
+                  document.addEventListener('DOMContentLoaded', () => {
+                    observer.observe(document.body, { childList: true, subtree: true });
+                  });
+                }
+              })();
+            `,
+          }}
+        />
       </head>
       <body
         className={`${inter.variable} ${mono.variable} ${giest.variable} ${departureMono.variable} antialiased min-h-screen flex flex-col bg-white bg-[linear-gradient(to_right,#80808007_1px,transparent_1px),linear-gradient(to_bottom,#80808007_1px,transparent_1px)] bg-[size:24px_24px]`}

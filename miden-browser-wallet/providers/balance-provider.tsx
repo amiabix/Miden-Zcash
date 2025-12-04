@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { type ReactNode, createContext, useRef, useContext } from "react";
+import { useEffect, useState, useRef, type ReactNode, createContext, useContext } from "react";
 import { useStore } from "zustand";
 import { type BalanceState, createBalanceStore } from "@/store/balance";
 import { PRIVATE_NOTE_TRANSPORT_URL, RPC_ENDPOINT } from "@/lib/constants";
@@ -48,6 +47,8 @@ export const useObserveBalance = () => {
   const account = useMidenSdkStore((state) => state.account);
   const loadBalance = useBalanceStore((state) => state.loadBalance);
   const [client, setClient] = useState<any | null>(null);
+  const lastLoadRef = useRef<{ blockNum: number; account: string; timestamp: number } | null>(null);
+  const loadingRef = useRef(false);
 
   useEffect(() => {
     const initClient = async () => {
@@ -69,11 +70,36 @@ export const useObserveBalance = () => {
 
   useEffect(() => {
     if (!client || !account) {
-      console.warn(
-        "Miden SDK client or account address not initialized for balance observation",
-      );
       return;
     }
-    loadBalance(client, account);
-  }, [client, blockNum, account]);
+
+    // Prevent concurrent loads
+    if (loadingRef.current) {
+      return;
+    }
+
+    // Debounce: Only load if blockNum changed significantly (every 10 blocks) or account changed
+    // Or if it's been more than 30 seconds since last load
+    const now = Date.now();
+    const lastLoad = lastLoadRef.current;
+    const shouldLoad = 
+      !lastLoad || // First load
+      lastLoad.account !== account || // Account changed
+      (blockNum - lastLoad.blockNum) >= 10 || // Significant block change (10 blocks)
+      (now - lastLoad.timestamp) > 30000; // More than 30 seconds since last load
+
+    if (shouldLoad) {
+      loadingRef.current = true;
+      lastLoadRef.current = { blockNum, account, timestamp: now };
+      
+      loadBalance(client, account)
+        .catch((err) => {
+          // Silently handle errors to prevent console spam
+          console.debug('Balance load error (suppressed):', err);
+        })
+        .finally(() => {
+          loadingRef.current = false;
+        });
+    }
+  }, [client, blockNum, account, loadBalance]);
 };

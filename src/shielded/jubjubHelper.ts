@@ -12,6 +12,7 @@
 
 import { blake2s } from '@noble/hashes/blake2s';
 import { mod } from '@noble/curves/abstract/modular';
+import { jubjub, jubjub_findGroupHash } from '@noble/curves/misc';
 import { concatBytes } from '../utils/bytes';
 
 /**
@@ -27,8 +28,8 @@ const JUBJUB = {
   // Order of the prime-order subgroup (r_J * h_J where h_J = 8)
   order: 6554484396890773809930967563523245960744023425112482949290220310578048130569n,
   // Curve coefficients for -x² + y² = 1 + d*x²*y²
-  a: -1n, // Official Zcash uses a = -1
-  d: 20296127846104866955287067402315667718816681564160243098514056682305223661570n, // Jubjub d parameter (verified against official generator)
+  a: 52435875175126190479447740508185965837690552500527637822603658699938581184512n, // -1 mod p (official Zcash)
+  d: 19257038036680949359750312669786877991949435402254120286184196891950884077233n, // Official Zcash Jubjub d parameter
 };
 
 /**
@@ -236,11 +237,14 @@ export class FieldElement {
 /**
  * Jubjub point on the twisted Edwards curve
  * Uses affine coordinates (x, y)
+ *
+ * Internally caches the noble/curves representation for arithmetic operations
  */
 export class JubjubPoint {
   x: FieldElement;
   y: FieldElement;
   isInfinity: boolean;
+  private noblePoint?: any; // Cached noble point for arithmetic
 
   /**
    * Create a Jubjub point
@@ -249,49 +253,39 @@ export class JubjubPoint {
     this.x = x instanceof FieldElement ? x : new FieldElement(x);
     this.y = y instanceof FieldElement ? y : new FieldElement(y);
     this.isInfinity = isInfinity;
+    this.noblePoint = undefined; // Will be computed lazily
+  }
+
+  /**
+   * Get or compute the noble representation of this point
+   */
+  private getNoblePoint() {
+    if (this.noblePoint === undefined) {
+      if (this.isInfinity) {
+        this.noblePoint = jubjub.Point.ZERO;
+      } else {
+        // Convert to bytes and decompress via noble
+        this.noblePoint = jubjub.Point.fromBytes(this.toBytes());
+      }
+    }
+    return this.noblePoint;
   }
 
   /**
    * Point doubling on twisted Edwards curve
-   * For Jubjub (a = -1, d = -10240/10241):
-   * x3 = (2*x*y) / (1 + d*x²*y²)
-   * y3 = (y² - a*x²) / (1 - d*x²*y²)
-   * 
-   * With a = -1: y3 = (y² + x²) / (1 - d*x²*y²)
+   * Delegates to @noble/curves for proven correctness
    */
   double(): JubjubPoint {
     if (this.isInfinity) {
       return new JubjubPoint(0n, 1n, true);
     }
 
-    const x2 = this.x.square();
-    const y2 = this.y.square();
-    const x2y2 = x2.multiply(y2);
-    
-    const one = new FieldElement(1n);
-    const denominator1 = one.add(JUBJUB_D.multiply(x2y2)); // 1 + d*x²*y²
-    const denominator2 = one.subtract(JUBJUB_D.multiply(x2y2)); // 1 - d*x²*y²
-    
-    // Numerator: 2*x*y
-    const numerator1 = this.x.multiply(this.y).scalarMult(2n);
-    
-    // Numerator: y² - a*x² = y² + x² (since a = -1)
-    const numerator2 = y2.add(x2);
-    
-    // Compute x3 and y3
-    const x3 = numerator1.multiply(denominator1.invert());
-    const y3 = numerator2.multiply(denominator2.invert());
+    // Use noble's doubling
+    const noblePoint = this.getNoblePoint();
+    const doubled = noblePoint.double();
+    const affine = doubled.toAffine();
 
-    // Use FieldElements directly to preserve precision
-    const result = new JubjubPoint(x3, y3);
-    
-    // Verify result is on curve
-    // If this fails, there's a bug in the doubling formula
-    if (!result.isOnCurve()) {
-      console.warn('Point doubling result may not be exactly on curve. This indicates a potential bug.');
-    }
-    
-    return result;
+    return new JubjubPoint(affine.x, affine.y);
   }
 
   /**
@@ -360,60 +354,23 @@ export class JubjubPoint {
     // x3 = (x1*y2 + y1*x2) / (1 + d*x1*x2*y1*y2)
     // y3 = (y1*y2 + x1*x2) / (1 - d*x1*x2*y1*y2)
     //
-    // Compute d*x1*x2*y1*y2 with proper field arithmetic
-    // Use intermediate variables to ensure proper reduction at each step
-    const x1x2 = this.x.multiply(other.x);
-    const y1y2 = this.y.multiply(other.y);
-    const x1x2y1y2 = x1x2.multiply(y1y2);
-    const dxy = JUBJUB_D.multiply(x1x2y1y2);
-    
-    const one = new FieldElement(1n);
-    const denominator_x = one.add(dxy); // 1 + d*x1*x2*y1*y2
-    const denominator_y = one.subtract(dxy); // 1 - d*x1*x2*y1*y2
+    // Use noble's addition
+    const nobleP1 = this.getNoblePoint();
+    const nobleP2 = other.getNoblePoint();
+    const sum = nobleP1.add(nobleP2);
 
-    if (denominator_x.value === 0n || denominator_y.value === 0n) {
+    if (sum.equals(jubjub.Point.ZERO)) {
       return new JubjubPoint(0n, 1n, true);
     }
 
-    // Compute numerators
-    const x1y2 = this.x.multiply(other.y);
-    const y1x2 = this.y.multiply(other.x);
-    const numerator_x = x1y2.add(y1x2); // x1*y2 + y1*x2
-    
-    const numerator_y = y1y2.add(x1x2); // y1*y2 + x1*x2
-
-    // Compute x3 and y3 with proper field inversion
-    const inv_denom_x = denominator_x.invert();
-    const inv_denom_y = denominator_y.invert();
-    
-    const x3 = numerator_x.multiply(inv_denom_x);
-    const y3 = numerator_y.multiply(inv_denom_y);
-
-    // Construct result point - FieldElements are already properly reduced
-    const result = new JubjubPoint(x3, y3);
-    
-    // Verify result is on curve (critical for associativity)
-    // This should always pass if the formula is correct
-    if (!result.isOnCurve()) {
-      // If this fails, there's a fundamental bug in the addition formula
-      // Log detailed information for debugging
-      console.error('Point addition result is NOT on curve!', {
-        x1: this.x.value.toString(16).slice(0, 20),
-        y1: this.y.value.toString(16).slice(0, 20),
-        x2: other.x.value.toString(16).slice(0, 20),
-        y2: other.y.value.toString(16).slice(0, 20),
-        x3: x3.value.toString(16).slice(0, 20),
-        y3: y3.value.toString(16).slice(0, 20)
-      });
-      // Still return the result - the issue might be in isOnCurve() itself
-    }
-    
-    return result;
+    const affine = sum.toAffine();
+    return new JubjubPoint(affine.x, affine.y);
   }
 
   /**
-   * Scalar multiplication using binary expansion
+   * Scalar multiplication
    * Computes k * P where k is a scalar
+   * Delegates to @noble/curves for proven correctness
    */
   scalarMult(scalar: bigint): JubjubPoint {
     if (this.isInfinity) {
@@ -421,24 +378,21 @@ export class JubjubPoint {
     }
 
     scalar = mod(scalar, JUBJUB.order);
-    
+
     if (scalar === 0n) {
       return new JubjubPoint(0n, 1n, true);
     }
 
-    let result = new JubjubPoint(0n, 1n, true); // Point at infinity
-    // Create addend from the current point - use FieldElements directly to avoid precision issues
-    let addend = new JubjubPoint(this.x, this.y);
+    // Use noble's multiplication
+    const noblePoint = this.getNoblePoint();
+    const multiplied = noblePoint.multiply(scalar);
 
-    while (scalar > 0n) {
-      if ((scalar & 1n) !== 0n) {
-        result = result.add(addend);
-      }
-      addend = addend.double();
-      scalar >>= 1n;
+    if (multiplied.equals(jubjub.Point.ZERO)) {
+      return new JubjubPoint(0n, 1n, true);
     }
 
-    return result;
+    const affine = multiplied.toAffine();
+    return new JubjubPoint(affine.x, affine.y);
   }
 
   /**
@@ -483,7 +437,8 @@ export class JubjubPoint {
   }
 
   /**
-   * Decode point from compressed bytes
+   * Decode point from compressed bytes using @noble/curves
+   * This ensures compatibility with jubjub_findGroupHash output
    */
   static fromBytes(bytes: Uint8Array): JubjubPoint {
     if (bytes.length !== 32) {
@@ -496,24 +451,11 @@ export class JubjubPoint {
       return new JubjubPoint(0n, 1n, true);
     }
 
-    const yBytes = new Uint8Array(bytes);
-    const xSign = (yBytes[31] & 0x80) !== 0;
-    yBytes[31] &= 0x7f;
+    // Use noble's decompression which is proven to work
+    const noblePoint = jubjub.Point.fromBytes(bytes);
+    const affine = noblePoint.toAffine();
 
-    const y = FieldElement.fromBytes(yBytes);
-    const x = recoverX(y, xSign);
-
-    const point = new JubjubPoint(x, y);
-
-    // Note: recoverX should always produce a point on the curve by construction
-    // The x coordinate is computed from y using the curve equation, so validation
-    // should always pass. If it doesn't, there's a bug in recoverX.
-    // We skip explicit validation here for performance, but it can be enabled for debugging
-    // if (!point.isOnCurve()) {
-    //   throw new Error('Point from bytes is not on curve - recoverX bug');
-    // }
-
-    return point;
+    return new JubjubPoint(affine.x, affine.y);
   }
 }
 
@@ -688,47 +630,19 @@ export function jubjubFindGroupHash(personalization: Uint8Array, message: Uint8A
  */
 export function diversifyHash(diversifier: Uint8Array): Uint8Array {
   // ZIP 32: DiversifyHash(d) = abstJ("Zcash_Diversify", d)
-  // abstJ is hash-to-point: maps bytes to Jubjub point, then multiplies by cofactor
-  // Note: Approximately 50% of random bytes are quadratic residues, so we need ~2 iterations on average
-  // Personalization: "Zcash_Diversify" (16 bytes)
-  const personalization = Buffer.from('Zcash_Diversify');
-  const input = concatBytes(personalization, diversifier);
+  // Use official @noble/curves implementation for robust hash-to-curve
+  // blake2s requires exactly 8-byte personalization
+  const personalization = new TextEncoder().encode('Zcash_De');
 
-  // Try multiple attempts to find a valid curve point
-  // Roughly 20-30% of hash outputs will produce valid points, so we expect to find
-  // one within a few attempts on average
-  for (let i = 0; i < 256; i++) {
-    const hashInput = i === 0 ? input : concatBytes(input, new Uint8Array([i]));
-    const candidate = blake2s(hashInput, { dkLen: 32 });
-
-    try {
-      // Try to decode hash output as compressed point
-      // fromBytes extracts y and sign bit, then calls recoverX
-      const point = JubjubPoint.fromBytes(candidate);
-
-      // Multiply by cofactor h_J = 8 to ensure we're in the prime order subgroup
-      const cofactorPoint = point.scalarMult(JUBJUB_COFACTOR);
-
-      // Check if result is identity (should not be for valid points)
-      if (cofactorPoint.isInfinity) {
-        continue;
-      }
-
-      // Return the valid cofactored point
-      return cofactorPoint.toBytes();
-    } catch (error) {
-      // recoverX failed because the hash output doesn't correspond to a curve point
-      // This is expected for approximately 70-80% of hash outputs
-      // Try next iteration
-      continue;
-    }
+  const point = jubjub_findGroupHash(diversifier, personalization);
+  if (!point) {
+    throw new Error('diversifyHash: Could not find valid point after 256 attempts.');
   }
 
-  // If we can't find a valid point after 256 attempts, there's likely a bug
-  // This should be extremely rare with correct parameters and algorithms
-  throw new Error(
-    `diversifyHash: Could not find valid point after 256 attempts.`
-  );
+  // Convert point to 32-byte compressed form
+  // toRawBytes() returns Uint8Array, ensure it's properly typed
+  const bytes = point.toRawBytes();
+  return new Uint8Array(bytes);
 }
 
 /**

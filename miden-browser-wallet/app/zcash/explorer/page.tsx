@@ -407,15 +407,6 @@ export default function ZcashExplorerPage() {
           </p>
         </div>
 
-        {!isRPCConnected && (
-          <Card className="border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20">
-            <CardContent className="p-4">
-              <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                RPC connection required. Your local Zcash node is configured and should be connected.
-              </p>
-            </CardContent>
-          </Card>
-        )}
 
         <Card>
           <CardHeader>

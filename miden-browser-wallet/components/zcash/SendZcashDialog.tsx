@@ -302,9 +302,40 @@ export function SendZcashDialog({
       }, 2000);
     } catch (err: any) {
       console.error('[SendZcashDialog] Send failed:', err);
-      const errorMsg = err?.message || 'Failed to send transaction';
+      let errorMsg = err?.message || 'Failed to send transaction';
+      
+      // Provide helpful error messages for common issues
+      if (errorMsg.includes('listunspent') || errorMsg.includes('not supported') || errorMsg.includes('Cannot build transaction')) {
+        errorMsg = `❌ Cannot Send: RPC Limitation\n\n` +
+          `Your RPC endpoint (Tatum API) doesn't support the 'listunspent' method required for transparent transactions.\n\n` +
+          `Solutions:\n` +
+          `1. Use a full Zcash node (supports all RPC methods)\n` +
+          `2. For testnet: Set up a local zcashd node\n` +
+          `3. For mainnet: Use a full node RPC endpoint\n\n` +
+          `Note: Tatum API has limited RPC support and cannot build transparent transactions.`;
+      } else if (errorMsg.includes('No UTXOs') || errorMsg.includes('UTXO')) {
+        errorMsg = `No UTXOs available.\n\n` +
+          `Please click "Sync Transparent Address" first, or use a full Zcash node.`;
+      } else if (errorMsg.includes('No shielded notes found') || errorMsg.includes('hasn\'t scanned')) {
+        errorMsg = `❌ No Shielded Notes Found\n\n` +
+          `Your shielded address hasn't been synced yet.\n\n` +
+          `To send shielded transactions:\n` +
+          `1. Click "Sync Shielded Address" button\n` +
+          `2. This scans the blockchain to discover your notes\n` +
+          `3. Once notes are found, you can send transactions\n\n` +
+          `Note: You need to have received shielded transactions first, or sync will find no notes.`;
+      } else if (errorMsg.includes('Insufficient shielded funds')) {
+        // Keep the original message which now includes helpful context
+        errorMsg = errorMsg;
+      } else if (errorMsg.includes('Insufficient')) {
+        // Keep the original insufficient funds message
+        errorMsg = errorMsg;
+      }
+      
       setError(errorMsg);
-      toast.error(errorMsg);
+      toast.error(errorMsg, {
+        duration: 10000, // Show longer for important errors
+      });
     } finally {
       setSending(false);
     }
