@@ -1,32 +1,100 @@
 # Miden-Zcash Integration
 
-TypeScript implementation of Zcash transaction signing for Miden WebSDK and Browser Wallet. Supports transparent and shielded (Sapling) transactions with note scanning, proof generation, and blockchain synchronization.
+TypeScript implementation of Zcash transaction signing for Miden WebSDK and Browser Wallet. Supports transparent and shielded (Sapling) transactions with note scanning, proof generation, and synchronization.
 
 ## Architecture
 
-The integration is structured as a layered architecture with three main components: the core SDK, the browser wallet application, and an optional proving service. The core SDK (`src/`) implements all Zcash functionality in TypeScript, providing both high-level and low-level APIs. The browser wallet (`miden-browser-wallet/`) is a Next.js application that integrates the SDK with the Miden wallet UI. The proving service (`proving-service/`) is a Rust HTTP service that can generate Groth16 proofs server-side when client-side proving is unavailable.
+The Miden-Zcash integration follows a layered architecture, separating concerns into three principal components:
 
-The core SDK is organized into modules by functionality. The `address/` module handles address validation, Bech32 encoding for shielded addresses, and script generation for transparent addresses. The `crypto/` module implements key derivation from Miden account private keys using HKDF-SHA256 with network as domain separator, followed by BIP32 derivation for transparent keys and Jubjub curve operations for shielded keys. The `rpc/` module provides a client for communicating with Zcash nodes via JSON-RPC, with support for multiple authentication methods including Basic Auth and API key headers.
+- **Core SDK** (`src/`): Implements Zcash protocol features in TypeScript, offering both high-level and low-level APIs.
+- **Browser Wallet** (`miden-browser-wallet/`): A Next.js application that integrates the Core SDK and provides the user-facing wallet interface.
+- **Proving Service** (`proving-service/`): An optional Rust HTTP service that generates Groth16 proofs server-side for Sapling shielded transactions where client devices fail to prove locally.
 
-The `state/` module manages cached blockchain state. The `UTXOCache` stores unspent transaction outputs for transparent addresses, keyed by transaction ID and output index. The `NoteCache` stores shielded notes discovered through blockchain scanning, maintaining witnesses for Merkle tree proofs and tracking spent nullifiers to prevent double-spending. Both caches persist to IndexedDB in browser environments and file system in Node.js environments.
+Below is an architecture diagram illustrating their interaction and modular decomposition:
 
-The `transactions/` module handles transparent transaction construction, signing, and serialization. The `ZcashTransactionBuilder` selects UTXOs using a largest-first strategy, calculates change outputs, and constructs transaction structures. The `ZcashSigner` signs transaction inputs using ECDSA on secp256k1. The `TransactionSerializer` converts transactions to hex format for RPC broadcasting.
+```
+                                    +----------------------+
+                                    |  Zcash Node (rpc)    |
+                                    +----------+-----------+
+                                               ^
+                                               |
+                           JSON-RPC            |
+                                               v
++-----------------+               +------------------------+                +----------------------+
+| Browser Wallet  | <—HTTP/UI—>   |    Core SDK (src/)     | <——HTTP——>      |  Proving Service    |
+| (Next.js App)   |               |                        |   (optional)    |    (Rust HTTP)      |
++-----------------+               +------------------------+                +----------------------+
+        |                                    ^
+        |                                    |
+        v                                    |
++----------------------------+               |
+|    Miden Wallet API        |  <——————      |
++----------------------------+               |
+                                             |
+         (modules by functionality)          |
+                                             |
+    ┌─────────────────────────────────────────────────────────────────────────────┐
+    |  address/     – address validation & encoding (Bech32, script creation)     |
+    |  crypto/      – key derivation from Miden keys (HKDF, BIP32, Jubjub ops)    |
+    |  rpc/         – JSON-RPC client, multi-auth (basic, API key)                |
+    |  state/       – blockchain UTXO & note cache (IndexedDB/file, Merkle proof) |
+    |  transactions/– transparent tx building, signing (ECDSA), serialization     |
+    |  shielded/    – Sapling note scan, encryption, proof orchestration          |
+    |  wallet/      – integration between SDK and wallet, account/key mgmt.       |
+    |  provider/    – coordination layer: manages RPC, cache, sign/prove/scan     |
+    └─────────────────────────────────────────────────────────────────────────────┘
+```
 
-The `shielded/` module implements Sapling shielded transactions. The `jubjubHelper.ts` file implements Jubjub curve operations using the `@noble/curves` library, providing point addition, scalar multiplication, and ECDH key agreement for note encryption and decryption. The `noteScanner.ts` implements blockchain scanning by iterating through blocks, filtering transactions with Sapling outputs, and attempting decryption with incoming viewing keys. The `noteCache.ts` stores decrypted notes with their Merkle tree witnesses and provides note selection algorithms for spending. The `transactionBuilder.ts` constructs shielded transactions by building spend descriptions with nullifiers and proofs, output descriptions with encrypted notes, and computing binding signatures. The `groth16Integration.ts` orchestrates proof generation by selecting available provers (librustzcash WASM, delegated service, or fallbacks) and managing proof generation errors.
+### Component Details
 
-The `wallet/` module provides the integration layer between the SDK and Miden wallet. The `integration.ts` file exports the `ZcashModule` class, which is the high-level API that wallet developers use. It wraps the `ZcashProvider` and handles account derivation and key management. The `midenKeyBridge.ts` adapts the Miden wallet API to the Zcash SDK interface, handling private key export with user confirmation and deriving Zcash keys from Miden account keys.
+- **address/**: Validates addresses, handles Bech32 encoding for Sapling, and creates scripts for transparent addresses.
+- **crypto/**: Derives Zcash keys from Miden account keys using HKDF-SHA256 domain separated by network, then BIP32 for transparent, Jubjub for shielded operations.
+- **rpc/**: Communicates with Zcash nodes with JSON-RPC, supporting various authentication schemes (Basic Auth, API keys).
+- **state/**: Manages blockchain state with UTXOCache (for transparent outputs, keyed by txid:vout) and NoteCache (for Sapling notes, witnesses, and spent nullifiers); persists to IndexedDB (browser) or filesystem (Node).
+- **transactions/**: Builds, signs, and serializes transparent transactions; uses largest-first UTXO selection; ECDSA signing; serialization for RPC broadcast.
+- **shielded/**: Implements Sapling privacy: Jubjub ops (`@noble/curves`), blockchain scanning/decryption using ivk, maintaining witnesses; shielded tx construction with proofs and signatures; Groth16 proof orchestration (lib, service, fallbacks).
+- **wallet/**: Connects the SDK to the wallet UI/API; manages ZcashModule which is the developer API facade, and bridges key export/derivation from Miden.
+- **provider/**: The main operational orchestrator that wires up all modules, maintains caches, spawns builder/signer/scanner/provers, and optimizes RPC/state access.
 
-The `provider/` module contains `ZcashProvider`, the low-level API that coordinates all Zcash operations. It manages the RPC connection, state caches, transaction builders, signers, provers, and scanners. When initialized, it creates instances of all required components and establishes the RPC connection. The provider maintains address caches, viewing key caches, and balance caches to minimize redundant computations and RPC calls.
+**Initialization Flow:**
+Upon initialization, the provider constructs and connects all modules, establishes RPC connection(s), and initiates state and balance caches for rapid wallet operation. Proving can automatically offload to the service or run in-browser as needed.
+
+***
+
+This modular separation enables easy extension (e.g., new proof mechanisms), cache persistence across both browser and Node environments, and robust integration with external wallets and proving services.
 
 ## Installation
 
-Clone the repository and install dependencies. The SDK requires Node.js 18 or higher. Run `npm install` in the root directory to install SDK dependencies, then run `npm run build` to compile TypeScript to JavaScript. The browser wallet requires pnpm 8 or higher. Navigate to `miden-browser-wallet/` and run `pnpm install` to install Next.js dependencies.
+- **Clone the repository:**
+  - Use `git clone` to copy the repository to your local machine.
 
-Configure environment variables by copying `miden-browser-wallet/.env.example` to `miden-browser-wallet/.env.local` and filling in your RPC credentials. The `NEXT_PUBLIC_ZCASH_RPC_ENDPOINT` variable must be set to your Zcash RPC endpoint URL. For Tatum API or similar services, set `NEXT_PUBLIC_ZCASH_RPC_API_KEY` to your API key. For local zcashd nodes, set `NEXT_PUBLIC_ZCASH_RPC_USER` and `NEXT_PUBLIC_ZCASH_RPC_PASSWORD` to the credentials configured in `~/.zcash/zcash.conf`.
+- **Install SDK dependencies:**
+  - Ensure you have Node.js 18 or higher installed.
+  - In the root directory, run `npm install`.
+  - Build the SDK by running `npm run build`.
 
-Download Sapling parameter files required for proof generation. Create the directory `miden-browser-wallet/public/params/` and download `sapling-spend.params` and `sapling-output.params` from the Zcash downloads page. These files are approximately 50MB each and are required for generating Groth16 proofs.
+- **Install browser wallet dependencies:**
+  - Make sure you have pnpm 8 or higher.
+  - Navigate to `miden-browser-wallet/`.
+  - Run `pnpm install` to install dependencies for the Next.js wallet app.
 
-Start the development server by running `pnpm dev` in the `miden-browser-wallet/` directory. The server runs on `http://localhost:3000` by default. The wallet will attempt to connect to the configured RPC endpoint on initialization.
+- **Configure environment variables:**
+  - Copy the example environment file:  
+    `cp miden-browser-wallet/.env.example miden-browser-wallet/.env.local`
+  - Edit `miden-browser-wallet/.env.local` and fill in your RPC credentials:
+    - Set `NEXT_PUBLIC_ZCASH_RPC_ENDPOINT` to your Zcash RPC endpoint URL.
+    - For Tatum API or similar services, set `NEXT_PUBLIC_ZCASH_RPC_API_KEY` to your API key.
+    - For a local zcashd node, set `NEXT_PUBLIC_ZCASH_RPC_USER` and `NEXT_PUBLIC_ZCASH_RPC_PASSWORD` as configured in `~/.zcash/zcash.conf`.
+
+- **Download Sapling parameter files (required for proof generation):**
+  - Create the directory `miden-browser-wallet/public/params/` if it does not exist.
+  - Download `sapling-spend.params` and `sapling-output.params` from the official Zcash downloads page.
+  - Place these files in `miden-browser-wallet/public/params/` (each file is ~50MB).
+
+- **Start the development server:**
+  - In `miden-browser-wallet/`, run `pnpm dev`.
+  - By default, the server will be available at `http://localhost:3000/`.
+  - On startup, the wallet will attempt to connect to the configured Zcash RPC endpoint.
 
 ## Configuration
 
@@ -37,8 +105,6 @@ The `NEXT_PUBLIC_ZCASH_RPC_ENDPOINT` variable specifies the Zcash RPC endpoint U
 For local zcashd nodes, configure `NEXT_PUBLIC_ZCASH_RPC_USER` and `NEXT_PUBLIC_ZCASH_RPC_PASSWORD` to match the `rpcuser` and `rpcpassword` values in `~/.zcash/zcash.conf`. The `NEXT_PUBLIC_ZCASH_PROVING_SERVICE` variable specifies the URL of the delegated proving service, defaulting to `http://localhost:8081` if not set.
 
 The `NEXT_PUBLIC_USE_BACKEND_RPC_PROXY` variable, when set to `true`, routes all RPC requests through the Next.js API route at `/api/zcash/rpc` instead of making direct RPC calls from the browser. This keeps API keys server-side and prevents exposure in the browser bundle. When using the backend proxy, configure server-side variables `ZCASH_RPC_ENDPOINT`, `ZCASH_RPC_API_KEY`, `ZCASH_RPC_USER`, and `ZCASH_RPC_PASSWORD` instead of the `NEXT_PUBLIC_` prefixed versions.
-
-Tatum API has limitations that affect functionality. The `listunspent` RPC method is not supported, which prevents building transparent transactions that require UTXO selection. Transparent transactions can only be built with a full Zcash node that supports all RPC methods. Shielded transactions work with Tatum API since they use note scanning rather than UTXO queries.
 
 ## Key Derivation
 
