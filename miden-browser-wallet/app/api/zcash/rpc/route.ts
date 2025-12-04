@@ -10,10 +10,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Server-side only environment variables (no NEXT_PUBLIC_ prefix)
-const RPC_ENDPOINT = process.env.ZCASH_RPC_ENDPOINT || 'https://zcash-testnet.gateway.tatum.io/';
-const RPC_API_KEY = process.env.ZCASH_RPC_API_KEY || 't-692a372e3711cb06c8c50157-8ac3e5ed66a64742be4cc691';
-const RPC_USER = process.env.ZCASH_RPC_USER || 'zcashrpc';
-const RPC_PASSWORD = process.env.ZCASH_RPC_PASSWORD || '47da7583f01a8510f2edcdd062238fbeb8001e330e140754d711313032ffae17';
+// SECURITY: Never hardcode credentials. Always use environment variables.
+const RPC_ENDPOINT = process.env.ZCASH_RPC_ENDPOINT;
+const RPC_API_KEY = process.env.ZCASH_RPC_API_KEY;
+const RPC_USER = process.env.ZCASH_RPC_USER;
+const RPC_PASSWORD = process.env.ZCASH_RPC_PASSWORD;
+
+if (!RPC_ENDPOINT) {
+  console.warn('[RPC Proxy] ZCASH_RPC_ENDPOINT not set. RPC calls will fail.');
+}
 
 /**
  * POST /api/zcash/rpc

@@ -45,9 +45,8 @@ export async function initializeZcash(): Promise<ZcashModule> {
     : 'https://zcash-mainnet.gateway.tatum.io/';
   const rpcEndpoint = configuredEndpoint || defaultEndpoint;
   
-  // Auto-detect Tatum endpoint and set API key
+  // Auto-detect Tatum endpoint
   const isTatumEndpoint = rpcEndpoint.includes('tatum.io');
-  const tatumApiKey = 't-692a372e3711cb06c8c50157-8ac3e5ed66a64742be4cc691';
   const walletNetwork = midenWalletAdapter.getNetwork();
   
   let endpointToCheck = rpcEndpoint;
@@ -117,11 +116,8 @@ export async function initializeZcash(): Promise<ZcashModule> {
       rpcCredentials: useBackendProxy ? undefined : (process.env.NEXT_PUBLIC_ZCASH_RPC_USER && process.env.NEXT_PUBLIC_ZCASH_RPC_PASSWORD) ? {
         username: process.env.NEXT_PUBLIC_ZCASH_RPC_USER,
         password: process.env.NEXT_PUBLIC_ZCASH_RPC_PASSWORD
-      } : (rpcEndpoint.includes('127.0.0.1:18232') || rpcEndpoint.includes('localhost:18232')) ? {
-        username: 'zcashrpc',
-        password: '47da7583f01a8510f2edcdd062238fbeb8001e330e140754d711313032ffae17'
       } : undefined,
-      rpcApiKey: useBackendProxy ? undefined : (process.env.NEXT_PUBLIC_ZCASH_RPC_API_KEY || (rpcEndpoint.includes('tatum.io') ? 't-692a372e3711cb06c8c50157-8ac3e5ed66a64742be4cc691' : undefined)),
+      rpcApiKey: useBackendProxy ? undefined : process.env.NEXT_PUBLIC_ZCASH_RPC_API_KEY,
       useBackendProxy: useBackendProxy,
       backendProxyUrl: '/api/zcash/rpc',
       proofGenerationMode: 'auto',
