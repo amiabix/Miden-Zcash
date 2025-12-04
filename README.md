@@ -142,21 +142,6 @@ The incoming viewing key (ivk) is cached when addresses are loaded to enable not
 
 - State persistence uses IndexedDB in browser environments and the file system in Node.js environments. The `MerkleTreePersistence` class handles serialization and deserialization of tree state. The note cache uses a similar persistence mechanism, storing notes and spent nullifiers separately for efficient updates.
 
-
-## Transaction Flow
-
-When a user initiates a transparent transaction, the `ZcashModule.sendTransaction()` method is called with transaction parameters. The module delegates to `ZcashProvider.sendTransaction()`, which first validates the addresses and checks RPC connectivity. 
-
-**Automatic Address Import:** Before building the transaction, the wallet automatically imports the transparent address into the local zcashd node using `importaddress` RPC command. This ensures that `listunspent` can discover UTXOs. If no UTXOs are found in the cache, the wallet triggers an automatic sync of the transparent address.
-
-The provider calls `ZcashTransactionBuilder.buildTransaction()` to construct the transaction. The transaction builder calls `selectUTXOs()` which queries the UTXO cache. If the cache is empty, it falls back to an RPC `listunspent` call. The RPC client converts all amounts from ZEC (decimal) to zatoshi (integer) when receiving responses. UTXOs are selected using the largest-first strategy, and change is calculated. The builder includes safeguards to detect and convert any amounts that appear to be in ZEC format.
-
-The builder constructs the transaction structure with inputs and outputs, then calls `ZcashSigner.signTransaction()` to sign each input. After signing, the transaction is serialized to hex format by `TransactionSerializer.serialize()`. The serialized transaction is validated by `TransactionValidator.validate()` to ensure it meets Zcash protocol requirements. Finally, the transaction is broadcast via RPC `sendrawtransaction` and the transaction ID is returned.
-
-For shielded transactions, the flow begins with `ZcashModule.sendShieldedTransaction()`. The provider first checks that notes exist in the cache by calling `NoteSelector.selectNotes()`. If no notes are found, an error is thrown instructing the user to sync the address first.
-
-Selected notes are passed to `ShieldedTransactionBuilder.buildShieldedTransaction()`, which constructs spend descriptions with nullifiers and Merkle tree witnesses. Output descriptions are built for the recipient and change, with encrypted notes and commitments.
-
 <img width="975" height="835" alt="Screenshot 2025-12-04 at 4 08 04 PM" src="https://github.com/user-attachments/assets/bbd39613-13cd-4689-ae9a-a3cd8c1454ea" />
 
 link to the explorer: https://testnet.cipherscan.app/address/tmQpa1o4w5QMnjhv7bS1tN6iHiragzYvF6Q
