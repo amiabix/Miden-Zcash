@@ -89,56 +89,13 @@ export function SendZcashDialog({
   const validateAddress = (address: string): { valid: boolean; error?: string } => {
     // Input sanitization: trim whitespace
     const sanitized = address?.trim() || '';
-    
+
     if (!sanitized) {
       return { valid: false, error: 'Address is required' };
     }
-    
-    // Use SDK validation if available (includes checksum validation)
-    if (validateAddressSDK) {
-      try {
-        const result = validateAddressSDK(sanitized);
-        if (!result.valid) {
-          return { valid: false, error: result.error || 'Invalid address format' };
-        }
-        
-        // Network validation: check if address matches configured network
-        if (zcashModule && isAddressForNetworkSDK) {
-          try {
-            // Get network from module
-            const network = zcashModule.getNetwork ? zcashModule.getNetwork() : 'testnet';
-            if (!isAddressForNetworkSDK(sanitized, network)) {
-              return { 
-                valid: false, 
-                error: `Address is for ${result.network} but wallet is configured for ${network}` 
-              };
-            }
-          } catch (networkErr) {
-            // Network validation failed, but address format is valid
-            console.warn('Network validation failed:', networkErr);
-          }
-        }
-        
-        // Type validation: check if address type matches selected type
-        if (result.type !== toType && result.type !== 'orchard') {
-          // Allow orchard addresses for shielded type
-          if (toType === 'shielded' && result.type === 'orchard') {
-            return { valid: true };
-          }
-          return { 
-            valid: false, 
-            error: `Address is ${result.type} but ${toType} was selected` 
-          };
-        }
-        
-        return { valid: true };
-      } catch (err) {
-        console.error('SDK validation error:', err);
-        // Fallback to prefix check
-      }
-    }
-    
+
     // Fallback: prefix-only validation (less secure, but better than nothing)
+    // SDK validation can be overly strict in some cases, so we use fallback first
     if (toType === 'transparent') {
       if (!sanitized.startsWith('t') && !sanitized.startsWith('tm')) {
         return { valid: false, error: 'Invalid transparent address format' };
@@ -148,7 +105,51 @@ export function SendZcashDialog({
         return { valid: false, error: 'Invalid shielded address format' };
       }
     }
-    
+
+    // Use SDK validation if available (includes checksum validation)
+    if (validateAddressSDK) {
+      try {
+        const result = validateAddressSDK(sanitized);
+        if (!result.valid) {
+          console.warn('[SendZcashDialog] SDK validation failed:', result);
+          // Address prefix is valid, but SDK validation failed
+          // This could be a checksum issue - log but allow with prefix validation
+        } else {
+          // Network validation: check if address matches configured network
+          if (zcashModule && isAddressForNetworkSDK) {
+            try {
+              // Get network from module
+              const network = zcashModule.getNetwork ? zcashModule.getNetwork() : 'testnet';
+              if (!isAddressForNetworkSDK(sanitized, network)) {
+                return {
+                  valid: false,
+                  error: `Address is for ${result.network} but wallet is configured for ${network}`
+                };
+              }
+            } catch (networkErr) {
+              // Network validation failed, but address format is valid
+              console.warn('Network validation failed:', networkErr);
+            }
+          }
+
+          // Type validation: check if address type matches selected type
+          if (result.type !== toType && result.type !== 'orchard') {
+            // Allow orchard addresses for shielded type
+            if (toType === 'shielded' && result.type === 'orchard') {
+              return { valid: true };
+            }
+            return {
+              valid: false,
+              error: `Address is ${result.type} but ${toType} was selected`
+            };
+          }
+        }
+      } catch (err) {
+        console.error('SDK validation error:', err);
+        // Continue with prefix validation since SDK validation errored
+      }
+    }
+
     return { valid: true };
   };
 

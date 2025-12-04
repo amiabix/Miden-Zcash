@@ -223,9 +223,12 @@ export function bech32Decode(str: string): { hrp: string; data: Uint8Array } {
   if (!str || typeof str !== 'string' || str.length === 0) {
     throw new Error('Invalid bech32 string: empty or not a string');
   }
-  
+
   // Find separator
   const pos = str.lastIndexOf('1');
+  // pos < 1 means no separator or separator at start
+  // pos + 7 > str.length means not enough data after separator (need at least 6 for checksum)
+  // Correct check: pos >= 1 && pos + 6 < str.length (pos + 7 <= str.length)
   if (pos < 1 || pos + 7 > str.length) {
     throw new Error('Invalid bech32 string');
   }
