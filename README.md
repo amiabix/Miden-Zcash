@@ -18,7 +18,7 @@ Below is an architecture diagram illustrating their interaction and modular deco
 - **address/**: Validates addresses, handles Bech32 encoding for Sapling, and creates scripts for transparent addresses.
 - **crypto/**: Derives Zcash keys from Miden account keys using HKDF-SHA256 domain separated by network, then BIP32 for transparent, Jubjub for shielded operations.
 - **rpc/**: Communicates with Zcash nodes with JSON-RPC, supporting various authentication schemes (Basic Auth, API keys).
-- **state/**: Manages blockchain state with UTXOCache (for transparent outputs, keyed by txid:vout) and NoteCache (for Sapling notes, witnesses, and spent nullifiers); persists to IndexedDB (browser) or filesystem (Node).
+- **state/**: Manages chain state with UTXOCache (for transparent outputs, keyed by txid:vout) and NoteCache (for Sapling notes, witnesses, and spent nullifiers); persists to IndexedDB (browser) or filesystem (Node).
 - **transactions/**: Builds, signs, and serializes transparent transactions; uses largest-first UTXO selection; ECDSA signing; serialization for RPC broadcast.
 - **shielded/**: Implements Sapling privacy: Jubjub ops (`@noble/curves`), blockchain scanning/decryption using ivk, maintaining witnesses; shielded tx construction with signatures;
 - **wallet/**: Connects the SDK to the wallet UI/API; manages ZcashModule which is the developer API facade, and bridges key export/derivation from Miden.
@@ -48,7 +48,7 @@ Upon initialization, the provider constructs and connects all modules, establish
   - Copy the example environment file:  
     `cp miden-browser-wallet/.env.example miden-browser-wallet/.env.local`
   - Edit `miden-browser-wallet/.env.local` and fill in your RPC credentials:
-    - Set `NEXT_PUBLIC_ZCASH_RPC_ENDPOINT` to your local Zcash RPC endpoint URL (default: `http://localhost:18232` for testnet, `http://localhost:8232` for mainnet).
+    - Set `NEXT_PUBLIC_ZCASH_RPC_ENDPOINT` to your local Zcash RPC endpoint URL (default, The one i used : `http://localhost:18232` for testnet).
     - For a local zcashd node, set `NEXT_PUBLIC_ZCASH_RPC_USER` and `NEXT_PUBLIC_ZCASH_RPC_PASSWORD` as configured in `~/.zcash/zcash.conf`.
     - The wallet is designed to work with a local zcashd node. Ensure your zcashd node is running and accessible.
 
