@@ -117,32 +117,30 @@ The incoming viewing key (ivk) is cached when addresses are loaded to enable not
 
 ## Transaction Building
 
-Transparent transactions are built by selecting UTXOs from the UTXO cache or via RPC `listunspent` call. Before building a transaction, the wallet automatically imports transparent addresses into the local zcashd node using the `importaddress` RPC command. This ensures that `listunspent` can discover UTXOs for the address. If a balance exists but no UTXOs are found, the wallet may attempt a rescan with `rescan=true`.
+- Transparent transactions are built by selecting UTXOs from the UTXO cache or via RPC `listunspent` call. Before building a transaction, the wallet automatically imports transparent addresses into the local zcashd node using the `importaddress` RPC command. This ensures that `listunspent` can discover UTXOs for the address. If a balance exists but no UTXOs are found, the wallet may attempt a rescan with `rescan=true`.
 
-The UTXO selector uses a largest-first strategy, sorting available UTXOs by value in descending order and selecting the minimum set that covers the transaction amount plus fees. **Important:** All amounts are handled in zatoshi (1 ZEC = 100,000,000 zatoshi). The RPC client automatically converts amounts from ZEC (decimal) to zatoshi (integer) when receiving responses from zcashd. The transaction builder includes safeguards to detect and convert any amounts that appear to be in ZEC format.
+- The UTXO selector uses a largest-first strategy, sorting available UTXOs by value in descending order and selecting the minimum set that covers the transaction amount plus fees. **Important:** All amounts are handled in zatoshi (1 ZEC = 100,000,000 zatoshi). The RPC client automatically converts amounts from ZEC (decimal) to zatoshi (integer) when receiving responses from zcashd. The transaction builder includes safeguards to detect and convert any amounts that appear to be in ZEC format.
 
-Change is calculated as the difference between total input value and the sum of output value and fees. The transaction builder constructs a transaction structure with inputs referencing selected UTXOs and outputs for the recipient and change. Each input is signed using ECDSA on secp256k1 with the corresponding private key. The signature covers the transaction hash and is included in the scriptSig. The transaction is serialized to hex format for RPC broadcasting..
+- Change is calculated as the difference between total input value and the sum of output value and fees. The transaction builder constructs a transaction structure with inputs referencing selected UTXOs and outputs for the recipient and change. Each input is signed using ECDSA on secp256k1 with the corresponding private key. The signature covers the transaction hash and is included in the scriptSig. The transaction is serialized to hex format for RPC broadcasting..
 
-Nullifiers are computed from the spending key and note nullifier seed using a pseudo-random function. The nullifier prevents double-spending by revealing that a note has been spent without revealing which note. Merkle tree witnesses are generated on-demand from the cached tree state, proving that the note commitment exists in the tree.
+- Nullifiers are computed from the spending key and note nullifier seed using a pseudo-random function. The nullifier prevents double-spending by revealing that a note has been spent without revealing which note. Merkle tree witnesses are generated on-demand from the cached tree state, proving that the note commitment exists in the tree.
 
-Output descriptions are built for the recipient and any change. Each output contains an encrypted note, computed commitment. The note is encrypted using the recipient's diversified public key and a randomly generated ephemeral secret key. The commitment is computed using Pedersen hash on the Jubjub curve.
+- Output descriptions are built for the recipient and any change. Each output contains an encrypted note, computed commitment. The note is encrypted using the recipient's diversified public key and a randomly generated ephemeral secret key. The commitment is computed using Pedersen hash on the Jubjub curve.
 
-The binding signature is computed from the value balance and all spend and output descriptions. It ensures that the total value of inputs equals the total value of outputs plus fees. The transaction is serialized to binary format according to ZIP-225 specification.
+- The binding signature is computed from the value balance and all spend and output descriptions. It ensures that the total value of inputs equals the total value of outputs plus fees. The transaction is serialized to binary format according to ZIP-225 specification.
 
 <img width="1170" height="1025" alt="Screenshot 2025-12-04 at 1 08 50 PM" src="https://github.com/user-attachments/assets/be4e1d32-8de3-4b52-8444-16ccc3a94c03" />
 
 
 ## State Management
 
-The UTXO cache stores unspent transaction outputs for transparent addresses. Each entry is keyed by transaction ID and output index, and contains the script public key, amount (in zatoshi), confirmations, and block height. The cache is updated when addresses are synced via the `listunspent` RPC call. The RPC client automatically converts amounts from ZEC to zatoshi when storing in the cache. UTXOs are marked as spent when they are used in transaction inputs, and removed from the cache after confirmation. The cache includes a `clearAddress()` method to remove all UTXOs for a specific address, useful for debugging unit conversion issues.
+- The UTXO cache stores unspent transaction outputs for transparent addresses. Each entry is keyed by transaction ID and output index, and contains the script public key, amount (in zatoshi), confirmations, and block height. The cache is updated when addresses are synced via the `listunspent` RPC call. The RPC client automatically converts amounts from ZEC to zatoshi when storing in the cache. UTXOs are marked as spent when they are used in transaction inputs, and removed from the cache after confirmation. The cache includes a `clearAddress()` method to remove all UTXOs for a specific address, useful for debugging unit conversion issues.
 
-The note cache stores shielded notes discovered through blockchain scanning. Each note entry contains the note value, nullifier, commitment, diversifier, diversified public key, and Merkle tree witness. Notes are keyed by commitment for efficient lookup. The cache tracks spent nullifiers in a separate set to prevent double-spending attempts.
+- The note cache stores shielded notes discovered through blockchain scanning. Each note entry contains the note value, nullifier, commitment, diversifier, diversified public key, and Merkle tree witness. Notes are keyed by commitment for efficient lookup. The cache tracks spent nullifiers in a separate set to prevent double-spending attempts.
 
-<img width="1653" height="244" alt="Screenshot 2025-12-05 at 4 29 54 AM" src="https://github.com/user-attachments/assets/0b8f220f-1ecc-4a42-9b2a-899ab5da0200" />
+- The Merkle tree state is maintained separately from the note cache. The tree is stored as an incremental structure, allowing new commitments to be appended without recomputing the entire tree. The tree state includes the root hash, size (number of commitments), and the block height of the last update. Witnesses are generated on-demand by traversing the tree from the commitment leaf to the root.
 
-The Merkle tree state is maintained separately from the note cache. The tree is stored as an incremental structure, allowing new commitments to be appended without recomputing the entire tree. The tree state includes the root hash, size (number of commitments), and the block height of the last update. Witnesses are generated on-demand by traversing the tree from the commitment leaf to the root.
-
-State persistence uses IndexedDB in browser environments and the file system in Node.js environments. The `MerkleTreePersistence` class handles serialization and deserialization of tree state. The note cache uses a similar persistence mechanism, storing notes and spent nullifiers separately for efficient updates.
+- State persistence uses IndexedDB in browser environments and the file system in Node.js environments. The `MerkleTreePersistence` class handles serialization and deserialization of tree state. The note cache uses a similar persistence mechanism, storing notes and spent nullifiers separately for efficient updates.
 
 
 ## Transaction Flow
