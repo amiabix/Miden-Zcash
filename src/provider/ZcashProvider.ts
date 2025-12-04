@@ -385,8 +385,30 @@ export class ZcashProvider {
       }
     }
     
-    // For shielded addresses: Use RPC if available
+    // For shielded addresses: Use note cache first, then RPC as fallback
     if (type === 'shielded') {
+      // First, try to get balance from note cache (from discovered notes)
+      const noteCacheBalance = this.noteCache.getBalance(finalAddress);
+      if (noteCacheBalance.total > 0) {
+        // We have notes in cache - use that balance
+        const balance: Balance = {
+          confirmed: noteCacheBalance.total, // All notes in cache are confirmed
+          unconfirmed: 0,
+          total: noteCacheBalance.total,
+          pending: 0,
+          unit: 'zatoshi'
+        };
+        
+        // Cache the balance
+        this.balanceCache.set(finalAddress, {
+          balance,
+          timestamp: Date.now()
+        });
+        
+        return balance;
+      }
+      
+      // If no notes in cache, try RPC if available
       if (!this.rpcConnected) {
         return {
           confirmed: 0,
@@ -420,12 +442,13 @@ export class ZcashProvider {
 
         return balance;
       } catch (error: any) {
-        // If z_getBalance fails (method not supported or RPC error), return zero balance
-        // This can happen if the RPC doesn't support shielded balance queries
+        // If z_getBalance fails (method not supported or RPC error), 
+        // return note cache balance (which may be 0 if no notes discovered yet)
+        const fallbackBalance = this.noteCache.getBalance(finalAddress);
         return {
-          confirmed: 0,
+          confirmed: fallbackBalance.total,
           unconfirmed: 0,
-          total: 0,
+          total: fallbackBalance.total,
           pending: 0,
           unit: 'zatoshi'
         };
@@ -805,7 +828,7 @@ export class ZcashProvider {
       valueBalance: Number(signedShielded.shieldedBundle.valueBalance),
       bindingSig: bytesToHex(signedShielded.shieldedBundle.bindingSig),
       shieldedInputs: [],
-      shieldedOutputs: []
+      shieldedOutputs: signedShielded.shieldedBundle.outputs || []
     };
 
     return {
@@ -1076,10 +1099,17 @@ export class ZcashProvider {
         this.utxoCache.updateUTXOs(finalAddress, utxos, blockCount);
       } catch (utxoError: any) {
         const errorMsg = utxoError?.message || String(utxoError || '');
-        if (errorMsg.includes('not found') || errorMsg.includes('Method not found') || errorMsg.includes('listunspent')) {
-          // RPC doesn't support listunspent - this is expected for Tatum
-          // We can't populate UTXO cache, but we can still get balance
-          console.warn(`[ZcashProvider] listunspent not supported - cannot populate UTXO cache for ${finalAddress}`);
+        if (errorMsg.includes('not found') || errorMsg.includes('Method not found') || errorMsg.includes('listunspent') || errorMsg.includes('reindexing')) {
+          // RPC doesn't support listunspent or node is reindexing
+          // Try fallback: fetch from block explorer API (if available)
+          // For now, we can't populate UTXO cache, but we can still get balance
+          console.warn(`[ZcashProvider] listunspent not available (${errorMsg.includes('reindexing') ? 'node reindexing' : 'method not supported'}) - cannot populate UTXO cache for ${finalAddress}`);
+          
+          // If node is reindexing, this is expected - don't throw error
+          // The wallet can still work if UTXOs are manually added to cache
+          if (!errorMsg.includes('reindexing')) {
+            // Only log warning for method not found, not for reindexing
+          }
         } else {
           // Re-throw other errors
           throw utxoError;
@@ -1115,23 +1145,25 @@ export class ZcashProvider {
       let viewingKey = await this.getViewingKeyForAddress(finalAddress);
       
       if (!viewingKey) {
-        // Viewing key not in cache - try to derive it from address mapping
+        // Viewing key not in cache - try to get it from the ZcashModule's account
+        // The viewing key should be available from getActiveZcashAccount()
+        // But we need to access it through the module, which we don't have direct access to here
+        // So we'll throw a helpful error instead
         const midenAccountId = this.addressToAccountId.get(finalAddress);
         
         if (midenAccountId) {
-          console.warn(`Viewing key not found for address ${finalAddress}. Call getAddresses() first.`);
+          throw new Error(
+            `Viewing key not found for address ${finalAddress.slice(0, 20)}...\n\n` +
+            `To sync shielded addresses, the viewing key must be cached.\n\n` +
+            `Solution: Call getAddresses() or getActiveZcashAccount() first to populate the viewing key cache.\n\n` +
+            `This requires exporting the private key from the Miden wallet with user permission.`
+          );
         } else {
-          console.warn(`Address ${finalAddress} not found in cache. Call getAddresses() first.`);
+          throw new Error(
+            `Address ${finalAddress.slice(0, 20)}... not found in cache.\n\n` +
+            `Please call getAddresses() first to register the address and cache the viewing key.`
+          );
         }
-        const balance = await this.getBalance(finalAddress, 'shielded');
-        const cachedNotes = this.noteCache.getNotesForAddress(finalAddress);
-        return {
-          address: finalAddress,
-          newTransactions: cachedNotes.length,
-          updatedBalance: balance,
-          lastSynced: Date.now(),
-          blockHeight: blockCount
-        };
       }
 
       // Initialize note scanner and synchronizer if not already done
@@ -1385,10 +1417,14 @@ export class ZcashProvider {
     // Try to find midenAccountId from reverse mapping
     const midenAccountId = this.addressToAccountId.get(address);
     if (!midenAccountId) {
+      // Address not in our cache - can't derive viewing key without account ID
       return null;
     }
     
     // If we have the address but not the viewing key, we need to re-derive
+    // But we can't derive without the private key, which requires user permission
+    // Return null and let the caller handle it (they should call getAddresses first)
+    console.warn(`[ZcashProvider] Viewing key not cached for ${address}. Call getAddresses() first to populate cache.`);
     return null;
   }
 

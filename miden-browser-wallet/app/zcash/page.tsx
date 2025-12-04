@@ -271,14 +271,12 @@ export default function ZcashPage() {
               {addresses.tAddress && (
                 <Button 
                   onClick={() => setShowSendDialog(true)}
-                  disabled={!isRPCConnected || !transparentBalance || transparentBalance.total === 0}
+                  disabled={!transparentBalance || transparentBalance.total === 0}
                   variant="default"
                   title={
-                    !isRPCConnected 
-                      ? 'RPC not connected - cannot send transactions' 
-                      : (!transparentBalance || transparentBalance.total === 0) 
-                        ? 'No balance available' 
-                        : 'Send Zcash (Note: Requires full Zcash node for transparent transactions)'
+                    (!transparentBalance || transparentBalance.total === 0) 
+                      ? 'No balance available' 
+                      : 'Send Zcash'
                   }
                 >
                   <Send className="w-4 h-4 mr-2" />
@@ -380,11 +378,6 @@ export default function ZcashPage() {
                 >
                   View on CipherScan Testnet →
                 </a>
-                {!isRPCConnected && (
-                  <p className="text-xs text-yellow-600 dark:text-yellow-400">
-                    ⚠️ Sending requires a full Zcash node (Tatum API doesn't support listunspent)
-                  </p>
-                )}
               </div>
             )}
           </CardContent>

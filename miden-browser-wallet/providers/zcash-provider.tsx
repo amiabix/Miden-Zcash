@@ -253,6 +253,23 @@ export function ZcashProvider({ children }: { children: React.ReactNode }) {
       setRpcEndpoint(zcashModule.getRPCEndpoint());
       setIsRPCConnected(zcashModule.isRPCConnected());
 
+      // Expose provider and UTXO cache to window for manual UTXO entry during testing
+      if (typeof window !== 'undefined') {
+        try {
+          const provider = await zcashModule.getProvider();
+          if (provider && (provider as any).utxoCache) {
+            (window as any).__zcashProvider = provider;
+            (window as any).__zcashUtxoCache = (provider as any).utxoCache;
+            console.log('[ZcashProvider] ✅ Exposed provider to window.__zcashProvider');
+            console.log('[ZcashProvider] ✅ Exposed UTXO cache to window.__zcashUtxoCache');
+            console.log('[ZcashProvider] 💡 For manual UTXO entry (during node reindexing), use:');
+            console.log('[ZcashProvider]    window.__zcashUtxoCache.addUTXO(address, utxo, blockHeight)');
+          }
+        } catch (exposeError) {
+          console.warn('[ZcashProvider] Could not expose provider to window:', exposeError);
+        }
+      }
+
       // Don't auto-load account - let user trigger it manually via "Load Addresses" button
       // This prevents showing the "Private key export required" message prematurely
       // refreshAccount(zcashModule).catch(err => {

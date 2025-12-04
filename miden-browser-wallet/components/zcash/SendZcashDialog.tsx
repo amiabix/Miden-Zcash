@@ -185,7 +185,9 @@ export function SendZcashDialog({
     const sanitizedAddress = toAddress.trim();
     const validation = validateAddress(sanitizedAddress);
     if (!validation.valid) {
-      toast.error(validation.error || `Invalid ${toType} address format`);
+      const errorMsg = validation.error || `Invalid ${toType} address format! Please verify if you entered your Zcash address correctly and try again.`;
+      toast.error(errorMsg);
+      setError(errorMsg);
       setSending(false);
       return;
     }
@@ -327,6 +329,14 @@ export function SendZcashDialog({
       } else if (errorMsg.includes('Insufficient shielded funds')) {
         // Keep the original message which now includes helpful context
         errorMsg = errorMsg;
+      } else if (errorMsg.includes('reindexing') || errorMsg.includes('disabled while reindexing')) {
+        errorMsg = `❌ Node is Reindexing\n\n` +
+          `Your Zcash node is currently reindexing blocks and has disabled wallet operations.\n\n` +
+          `This means:\n` +
+          `- The node is catching up with the blockchain\n` +
+          `- Wallet operations (listunspent, sendrawtransaction) are temporarily disabled\n` +
+          `- You need to wait for reindexing to complete\n\n` +
+          `Once reindexing finishes, you'll be able to send transactions.`;
       } else if (errorMsg.includes('Insufficient')) {
         // Keep the original insufficient funds message
         errorMsg = errorMsg;

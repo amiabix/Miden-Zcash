@@ -250,6 +250,35 @@ export class ZcashModule {
     lastSynced: number;
     blockHeight: number;
   }> {
+    // For shielded addresses, ensure viewing key is cached first
+    if (type === 'shielded') {
+      try {
+        // Get the active account to ensure viewing key is available
+        const account = await this.getActiveZcashAccount();
+        
+        // Cache the viewing key in the provider if not already cached
+        // The provider's getAddresses() should have cached it, but ensure it's there
+        if (account.zAddress === address && account.viewingKey) {
+          // Viewing key is in the account object - ensure it's cached in provider
+          // This is done by calling getAddresses() which caches the viewing key
+          try {
+            const midenPrivateKey = await this.config.midenWallet.exportPrivateKey(account.midenAccountId);
+            if (midenPrivateKey && midenPrivateKey.length > 0) {
+              await this.provider.getAddresses(account.midenAccountId, midenPrivateKey);
+              midenPrivateKey.fill(0);
+            }
+          } catch (keyError) {
+            // If private key export fails, we can't cache the viewing key
+            // But we can still try to sync if it's already cached
+            console.warn('Could not cache viewing key, but proceeding with sync if already cached');
+          }
+        }
+      } catch (accountError) {
+        // If we can't get the account, the sync will fail with a helpful error
+        console.warn('Could not ensure viewing key is cached:', accountError);
+      }
+    }
+    
     return await this.provider.syncAddress(address, type);
   }
 

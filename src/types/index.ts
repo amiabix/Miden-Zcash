@@ -50,7 +50,7 @@ export interface Transaction {
   transparentInputs: TransparentInput[];
   transparentOutputs: TransparentOutput[];
   shieldedInputs?: Note[];
-  shieldedOutputs?: ShieldedOutput[];
+  shieldedOutputs?: ShieldedOutput[] | any[];  // Can be ShieldedOutput[] or ShieldedOutputDescription[]
   joinsplits?: JoinSplit[];
   bindingSig?: string;
   valueBalance?: number;

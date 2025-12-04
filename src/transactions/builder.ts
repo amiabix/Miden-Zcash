@@ -101,16 +101,20 @@ export class ZcashTransactionBuilder {
         utxos = await this.config.rpcClient.listUnspent(1, 9999999, [address]);
       } catch (error: any) {
         const errorMsg = error?.message || String(error || '');
-        if (errorMsg.includes('not found') || errorMsg.includes('Method not found')) {
-          // Tatum and some RPC endpoints don't support listunspent
-          // For any transparent transaction (t->t or t->z), we need UTXOs
+        if (errorMsg.includes('not found') || errorMsg.includes('Method not found') || errorMsg.includes('reindexing')) {
+          // RPC doesn't support listunspent or node is reindexing
+          // Provide helpful error message with workaround
+          const isReindexing = errorMsg.includes('reindexing');
           throw new Error(
-            `Cannot build transaction: RPC method 'listunspent' not supported by this endpoint.\n\n` +
-            `To send transparent transactions, you need UTXOs which require:\n` +
-            `1. A full Zcash node (supports listunspent), OR\n` +
-            `2. Sync your address first (but sync also requires listunspent)\n\n` +
-            `Current limitation: Tatum API and some RPC endpoints don't support listunspent.\n` +
-            `This prevents building transparent transactions without a full node.`
+            `Cannot build transaction: ${isReindexing ? 'Node is reindexing and wallet operations are disabled' : 'RPC method \'listunspent\' not supported by this endpoint'}.\n\n` +
+            `To send transparent transactions, you need UTXOs.\n\n` +
+            `Solutions:\n` +
+            `1. Wait for node to finish reindexing (if reindexing)\n` +
+            `2. Use a full Zcash node that supports listunspent\n` +
+            `3. For testing: Manually add UTXOs to cache using developer console\n\n` +
+            `Development workaround:\n` +
+            `Open browser console and run:\n` +
+            `  window.__zcashProvider?.utxoCache?.addUTXO('${address}', {txid: '...', vout: 0, amount: ..., scriptPubKey: '...', confirmations: 6}, ${await this.config.rpcClient.getBlockCount()})`
           );
         }
         throw error;
@@ -118,7 +122,16 @@ export class ZcashTransactionBuilder {
     }
 
     if (utxos.length === 0) {
-      throw new Error('No UTXOs available for address. Please sync the address first using syncAddress().');
+      throw new Error(
+        `No UTXOs available for address ${address.slice(0, 20)}...\n\n` +
+        `To send transparent transactions, you need UTXOs.\n\n` +
+        `Solutions:\n` +
+        `1. Click "Sync Transparent Address" in the wallet UI to discover UTXOs\n` +
+        `2. If using a full node, ensure the address is imported: importaddress "${address}"\n` +
+        `3. For testing: Manually add UTXOs using browser console:\n` +
+        `   window.__zcashUtxoCache?.addUTXO('${address}', {txid: '...', vout: 0, amount: ..., scriptPubKey: '', confirmations: 6}, ${await this.config.rpcClient.getBlockCount()})\n\n` +
+        `Note: If the address was just funded, wait a few minutes for the transaction to confirm.`
+      );
     }
 
     // Sort by value (largest first)
